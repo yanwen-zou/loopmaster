@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopmaster-agentic"
+version = "0.1.0"
+description = "Agentic robotics framework for HEI ReBot Lift real-robot loops."
+requires-python = ">=3.12"
+dependencies = []
+
+[project.optional-dependencies]
+hei-rebot-lift = [
+    "deepdiff>=7.0.1,<9.0.0",
+    "draccus==0.10.0",
+    "huggingface-hub>=1.0.0,<2.0.0",
+    "numpy>=2.0.0,<2.4.0",
+    "opencv-python-headless>=4.9.0,<4.14.0",
+    "pyserial>=3.5,<4.0",
+    "pyzmq>=26.2.1,<28.0.0",
+    "torch>=2.7,<2.12.0",
+    "tqdm>=4.66.0,<5.0.0",
+]
+vr = [
+    "casadi>=3.7.0,<4.0.0",
+    "cmeel-tinyxml2>=10.0.0,<11.0.0",
+    "cmeel-urdfdom>=4.0.1,<5.0.0",
+    "mujoco==3.5.0",
+    "pin>=3.9.0,<4.0.0",
+    "pynput>=1.7.8,<1.9.0",
+    "pyyaml>=6.0",
+    "websockets>=15.0.0,<16.0.0",
+]
+dev = [
+    "pytest>=8.1.0,<9.0.0",
+]
+
+[project.scripts]
+loopmaster-agentic = "loopmaster_agentic.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["loopmaster_agentic*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

@@ -1,0 +1,5 @@
+# Install the LoopMaster agent plus the HEI ReBot Lift and VR runtime dependencies:
+#   uv venv --python 3.12
+#   uv pip install -r requirements.txt
+
+-e .[hei-rebot-lift,vr,dev]

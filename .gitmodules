@@ -1,0 +1,3 @@
+[submodule "hei-rebot-lift"]
+	path = hei-rebot-lift
+	url = git@github.com:lipengdong/hei-rebot-lift.git
