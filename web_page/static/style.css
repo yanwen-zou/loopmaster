@@ -201,3 +201,51 @@ tr:hover td{background:var(--panel2)}
 .mt{margin-top:18px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 @media(max-width:560px){.two-col{grid-template-columns:1fr}}
+
+/* ============ 手机适配 ============ */
+body{-webkit-text-size-adjust:100%}   /* 禁止 iOS 自动放大字号导致错位 */
+
+@media(max-width:640px){
+  /* 顶栏：品牌一行、链接自动换到右下并右对齐，不再挤成一坨 */
+  .topbar{padding:10px 14px;flex-wrap:wrap;gap:8px 10px}
+  .brand{font-size:17px;gap:8px}
+  .brand .logo{width:30px;height:30px;font-size:17px;border-radius:8px}
+  .brand small{font-size:11px}
+  .topbar .links{gap:8px;font-size:13px;flex-wrap:wrap;justify-content:flex-end}
+  .topbar .links a.agentloop{padding:6px 11px;font-size:12px;border-radius:16px}
+  .wallet{padding:5px 11px;font-size:13px;gap:6px}
+
+  .wrap{padding:14px}
+  .section-title{font-size:16px;margin:16px 0 10px}
+
+  /* 商品栅格：两列，间距收紧，文字不再挤到换行 */
+  .grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  .card{padding:13px;gap:6px;border-radius:12px}
+  .card .emoji{font-size:34px;margin:2px 0}
+  .card .name{font-size:14px;line-height:1.35}
+  .card .price{font-size:16px}
+
+  /* 登录卡 */
+  .login-card{margin:5vh auto;padding:26px 20px;border-radius:15px}
+  .login-card h1{font-size:21px}
+  .login-card p,.login-card .gift{font-size:13px}
+
+  /* 数据大屏 / 后台的统计卡与表格 */
+  .stats-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  .stat{padding:16px;border-radius:13px}
+  .stat .v{font-size:26px}
+  /* 表格允许横向滚动，避免把每格文字压成竖排 */
+  table{font-size:13px;display:block;overflow-x:auto;white-space:nowrap}
+  th,td{padding:9px 10px}
+
+  /* 底部购物篮浮层 */
+  .cart-bar{padding:11px 14px;gap:10px}
+  .cart-bar .info b{font-size:18px}
+}
+
+@media(max-width:380px){
+  .brand small{display:none}          /* 极窄屏隐藏副标题，品牌只留一行 */
+  .grid{gap:8px}
+  .card{padding:11px}
+  .stats-grid{grid-template-columns:1fr}
+}
