@@ -13,8 +13,7 @@
     <div>LoopViz<small>LoopMaster · Handler / Strategist / Worker / Auditor</small></div>
   </div>
   <div class="spacer"></div>
-  <a class="backlink" href="/dashboard">📊 数据大屏</a>
-  <a class="backlink" href="/">← 下单页</a>
+  <a class="backlink" href="/">← 返回首页</a>
   <select id="runSel" onchange="loadRun(this.value)"></select>
   <span id="verdict" class="verdict-badge v-unknown">—</span>
 </div>
@@ -27,6 +26,7 @@
 
 <script>
 let ROLES={}, SKILLS=[], RUN=null, CONTROL=[], TAB='overview';
+let CUR=null, IDLE=false; const POLL_MS=1500;
 const ORDER=['handler','strategist','worker','auditor'];
 const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
 const jfmt=o=>{try{return JSON.stringify(o,null,2)}catch(e){return String(o)}};
@@ -108,19 +108,37 @@ function skillChipsCard(){
 async function boot(){
   const s=await (await fetch('/api/loopviz/skills')).json();
   SKILLS=s.skills; ROLES=s.roles;
-  const rs=await (await fetch('/api/loopviz/runs')).json();
+  await refreshRuns();
+  setInterval(refreshRuns, POLL_MS);   // 轮询：有推送就实时显示，脚本停了就留白
+}
+async function refreshRuns(){
+  let rs; try{ rs=await (await fetch('/api/loopviz/runs')).json(); }catch(e){ return; }
   const sel=document.getElementById('runSel');
-  if(!rs.runs.length){ sel.innerHTML='<option>无 run（先跑 loopmaster 产生产物）</option>'; renderPipeline(); renderTabs(); render(); return; }
-  sel.innerHTML=rs.runs.map(r=>`<option value="${esc(r.id)}">${esc(r.verdict)} · ${esc(r.task).slice(0,60)}</option>`).join('');
-  loadRun(rs.runs[0].id);
+  const runs=(rs&&rs.runs)||[];
+  if(!runs.length){                    // 空闲：无实时运行 → 页面留白
+    IDLE=true; RUN=null; CUR=null;
+    sel.innerHTML='<option>空闲中（无运行）</option>';
+    const vb=document.getElementById('verdict'); vb.textContent='—'; vb.className='verdict-badge v-unknown';
+    renderPipeline(); renderTabs(); render();
+    return;
+  }
+  IDLE=false;
+  sel.innerHTML=runs.map(r=>`<option value="${esc(r.id)}">${esc(r.verdict)} · ${esc(r.task).slice(0,60)}</option>`).join('');
+  const ids=runs.map(r=>r.id);
+  if(!CUR || !ids.includes(CUR)){      // 当前所选已过期/未选 → 显示最新一条
+    CUR=ids[0]; await loadRun(CUR);
+  }
+  sel.value=CUR;
 }
 async function loadRun(id){
+  CUR=id;
   const d=await (await fetch('/api/loopviz/run/'+encodeURIComponent(id))).json();
   if(!d.ok){ return; }
-  RUN=d.run; CONTROL=d.control_skills;
+  IDLE=false; RUN=d.run; CONTROL=d.control_skills;
   const vb=document.getElementById('verdict');
   vb.textContent=RUN.verdict; vb.className='verdict-badge v-'+RUN.verdict;
   renderPipeline(); renderTabs(); render();
+  document.getElementById('runSel').value=id;
 }
 
 /* ------------ 顶部流水线条 ------------ */
@@ -151,6 +169,7 @@ function renderTabs(){
 function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
 function render(){
   const v=document.getElementById('view');
+  if(IDLE){ v.innerHTML='<div class="panel"><div class="empty">空闲中 · 运行 <code>test/push_demo.py</code> 后这里会实时显示机器人运行（每条约 3 秒）</div></div>'; return; }
   v.innerHTML = TAB==='overview' ? viewOverview() : viewAgent(TAB);
 }
 

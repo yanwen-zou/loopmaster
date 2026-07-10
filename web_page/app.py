@@ -15,6 +15,7 @@ import re
 import ast
 import glob
 import json
+import time
 import random
 import sqlite3
 from pathlib import Path
@@ -27,6 +28,9 @@ BACKUP_DIR = os.path.join(BASE_DIR, "backup")
 
 # LoopViz 数据源（只读扫描 loopmaster 产物，不修改其代码）
 LOOP_REPO = Path(BASE_DIR).parent / "loopmaster"
+# LoopViz 运行存活秒数：>0 时，run 超过该秒数自动从列表消失（演示用，脚本停推后页面自动留白）；
+# 0=永不过期（真实 agent 框架用）。环境变量 LOOPVIZ_TTL 控制。
+LOOPVIZ_TTL = float(os.environ.get("LOOPVIZ_TTL", "0") or 0)
 LOOP_SKILL_ROOT = LOOP_REPO / "loopmaster_agentic" / "skills" / "base"
 
 # 机械臂模拟参数
@@ -860,6 +864,9 @@ def _lv_list_runs():
         for d in root.iterdir():
             if d.is_dir() and (d / "plan.md").exists():
                 runs.append(d)
+    if LOOPVIZ_TTL > 0:                # 演示：过期的 run 不再列出
+        now = time.time()
+        runs = [d for d in runs if now - d.stat().st_mtime <= LOOPVIZ_TTL]
     runs.sort(key=lambda d: d.stat().st_mtime, reverse=True)
     return runs
 
@@ -1027,6 +1034,8 @@ def api_lv_run(run_id):
     for root in _lv_run_roots():
         cand = root / run_id
         if cand.exists() and (cand / "plan.md").exists():
+            if LOOPVIZ_TTL > 0 and time.time() - cand.stat().st_mtime > LOOPVIZ_TTL:
+                return jsonify(ok=False, msg="run expired"), 404
             return jsonify(ok=True, run=_lv_parse_run(cand), roles=LV_ROLES,
                            control_skills=sorted(LV_CONTROL_SKILLS))
     return jsonify(ok=False, msg="run not found"), 404

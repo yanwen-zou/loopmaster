@@ -8,6 +8,7 @@
 ```bash
 pip install -r requirements.txt      # 或 python -m venv 后再装
 python web_page/app.py
+python web_page/test/push_demo.py --token 06de644db26bf26dc5fbef2657b5af6b
 ```
 
 启动后打开：
