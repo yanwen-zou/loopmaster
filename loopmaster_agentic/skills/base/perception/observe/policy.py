@@ -10,5 +10,6 @@ def dispatch(context, args):
     if not include_images:
         summary["images"] = {}
     if not include_state:
+        summary["state"] = {}
         summary["state_keys"] = []
     return {"ok": True, "observation": summary}

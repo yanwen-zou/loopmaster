@@ -31,6 +31,21 @@ Python dependencies installed in the same uv environment. Run it with
 task policies in this tree. Learned skills can be added later under the user
 skill root without mixing them into the base platform adapter layer.
 
+## Skill Self-Repair Policy
+
+LoopMaster should not ask the operator to answer questions that can be resolved
+from the repository. When a run fails because a shipped skill omits data, has a
+schema mismatch, or has stale documentation, the agent loop should first inspect
+the local skill implementation and trace evidence, update the relevant
+`SKILL.md`/`policy.py` when it has write authority, and rerun the check. User
+input is reserved for hardware safety decisions, missing task intent, external
+runtime state, or changes that would create a new learned behavior.
+
+For example, if `observe` succeeds but the trace only exposes `state_keys` while
+downstream control needs numeric joint values, the correct repair is to update
+the `observe` skill to return numeric `state` values in its observation summary,
+then rerun. It is not a user-facing research question.
+
 ## HEI ReBot Lift Binding
 
 The platform adapter wraps the HEI ReBot Lift LeRobot interfaces already present

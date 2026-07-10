@@ -16,6 +16,7 @@ REQUIRED_MODULES = ("numpy", "PIL", "torch", "open3d", "MinkowskiEngine", "grasp
 
 
 def dispatch(context, args):
+    args = _merge_grounded_sam2_memory(context, dict(args or {}))
     sdk_root = Path(args.get("sdk_root") or _default_sdk_root()).expanduser().resolve()
     detection_dir = sdk_root / "grasp_detection"
     if not detection_dir.is_dir():
@@ -72,7 +73,12 @@ def dispatch(context, args):
             return {"ok": False, "error": "AnyGrasp create_detector returned None", "status": status}
 
         dense_grasp = bool(args.get("dense_grasp", False))
-        grasps = detector.get_grasp(points, _optional_params(points, seg_mask, args, dense_grasp))
+        optional_params = _optional_params(points, seg_mask, args, dense_grasp)
+        region = optional_params.get("region_steering")
+        if region is not None:
+            source["region_point_count"] = int(region.sum())
+            source["region_point_fraction"] = float(region.sum() / max(1, points.shape[0]))
+        grasps = detector.get_grasp(points, optional_params)
         if grasps is None:
             return {"ok": True, "status": status, "source": source, "grasp_count": 0, "grasps": []}
         if not dense_grasp:
@@ -107,6 +113,19 @@ def _prepare_gsnet_so(detection_dir: Path) -> Path:
     if not target.exists() or target.stat().st_size != source.stat().st_size:
         shutil.copy2(source, target)
     return target
+
+
+def _merge_grounded_sam2_memory(context: Any, args: dict[str, Any]) -> dict[str, Any]:
+    if args.get("seg_mask_path") or args.get("region_mask_path"):
+        return args
+    latest = getattr(context, "memory", {}).get("grounded_sam2") if hasattr(context, "memory") else None
+    if not isinstance(latest, dict):
+        return args
+    seg_mask_path = latest.get("seg_mask_path")
+    if seg_mask_path:
+        args["seg_mask_path"] = seg_mask_path
+        args.setdefault("region_object_id", latest.get("anygrasp_hint", {}).get("region_object_id") or 1)
+    return args
 
 
 def _prepare_license(sdk_root: Path, detection_dir: Path, args: dict[str, Any]) -> Path | None:
@@ -216,7 +235,14 @@ def _load_points(detection_dir: Path, args: dict[str, Any]):
         points = np.asarray(np.load(points_path), dtype=np.float32)
         if points.ndim != 2 or points.shape[1] != 3:
             raise ValueError(f"points_path must contain an Nx3 array, got shape {points.shape}")
-        return points, None, None, {"type": "points_path", "points_path": str(points_path)}
+        region = _load_point_region_mask(args, points.shape[0])
+        return points, None, region, {
+            "type": "points_path",
+            "points_path": str(points_path),
+            "region_mask_path": str(Path(args["region_mask_path"]).expanduser().resolve())
+            if args.get("region_mask_path")
+            else "",
+        }
 
     data_dir = Path(args.get("data_dir") or detection_dir / "example_data").expanduser()
     if not data_dir.is_absolute():
@@ -224,10 +250,12 @@ def _load_points(detection_dir: Path, args: dict[str, Any]):
     color_path = Path(args.get("color_path") or data_dir / "color.png").expanduser()
     depth_path = Path(args.get("depth_path") or data_dir / "depth.png").expanduser()
     seg_path = Path(args.get("seg_mask_path") or data_dir / "seg_mask.png").expanduser()
+    region_path = Path(args["region_mask_path"]).expanduser() if args.get("region_mask_path") else None
 
     colors = np.array(Image.open(color_path), dtype=np.float32) / 255.0
     depths = np.array(Image.open(depth_path))
     seg_raw = np.array(Image.open(seg_path)) if seg_path.is_file() else None
+    region_raw = _load_binary_mask_image(region_path) if region_path and region_path.is_file() else None
 
     fx = float(args.get("fx", 927.17))
     fy = float(args.get("fy", 927.37))
@@ -244,12 +272,19 @@ def _load_points(detection_dir: Path, args: dict[str, Any]):
     points = np.stack([points_x, points_y, points_z], axis=-1)[valid].astype(np.float32)
     colors = colors[valid].astype(np.float32)
     seg_mask = seg_raw[valid] if seg_raw is not None else None
+    if region_raw is not None:
+        if region_raw.shape[:2] != depths.shape[:2]:
+            raise ValueError(
+                f"region_mask_path shape {region_raw.shape[:2]} does not match depth image shape {depths.shape[:2]}"
+            )
+        seg_mask = region_raw[valid].astype(bool)
     return points, colors, seg_mask, {
         "type": "rgbd",
         "data_dir": str(data_dir),
         "color_path": str(color_path),
         "depth_path": str(depth_path),
         "seg_mask_path": str(seg_path) if seg_path.is_file() else "",
+        "region_mask_path": str(region_path) if region_path and region_path.is_file() else "",
     }
 
 
@@ -257,7 +292,9 @@ def _optional_params(points: Any, seg_mask: Any, args: dict[str, Any], dense_gra
     import numpy as np
 
     region = None
-    if seg_mask is not None and args.get("region_object_id") is not None:
+    if seg_mask is not None and seg_mask.dtype == bool:
+        region = seg_mask
+    elif seg_mask is not None and args.get("region_object_id") is not None:
         region = seg_mask == int(args["region_object_id"])
     if args.get("workspace"):
         limits = [float(value) for value in args["workspace"]]
@@ -282,6 +319,28 @@ def _optional_params(points: Any, seg_mask: Any, args: dict[str, Any], dense_gra
         "approach_steering": approach,
         "approach_thresh": float(args.get("approach_thresh", np.pi)),
     }
+
+
+def _load_point_region_mask(args: dict[str, Any], point_count: int):
+    if not args.get("region_mask_path"):
+        return None
+    import numpy as np
+
+    mask_path = Path(args["region_mask_path"]).expanduser().resolve()
+    region = np.asarray(np.load(mask_path)).astype(bool)
+    if region.ndim != 1 or region.shape[0] != point_count:
+        raise ValueError(f"region_mask_path for points_path must contain shape ({point_count},), got {region.shape}")
+    return region
+
+
+def _load_binary_mask_image(path: Path):
+    import numpy as np
+    from PIL import Image
+
+    mask = np.array(Image.open(path))
+    if mask.ndim == 3:
+        mask = np.any(mask > 0, axis=2)
+    return mask.astype(bool)
 
 
 def _serialize_grasps(group: Any) -> list[dict[str, Any]]:

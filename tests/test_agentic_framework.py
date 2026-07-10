@@ -5,12 +5,17 @@ import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from typing import Any
 
+from loopmaster_agentic import cli as cli_module
 from loopmaster_agentic.agents import Auditor, Handler, Strategist, Worker
-from loopmaster_agentic.agents.handler_chat import HandlerChatSession
+from loopmaster_agentic.agents.handler_chat import HandlerChatSession, format_handler_reply
+from loopmaster_agentic.agents.skill_updater import apply_review_skill_updates
 from loopmaster_agentic.cli import main
+from loopmaster_agentic.core.result import RunResult
+from loopmaster_agentic.core.types import Plan, TraceStep
 from loopmaster_agentic.platform.dry_run import DryRunPlatform
 from loopmaster_agentic.platform.hei_rebot_lift import HeiRebotLiftPlatform, split_hei_observation
 from loopmaster_agentic.skills.registry import SkillContext, SkillRegistry
@@ -32,6 +37,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             {
                 "capture_image",
                 "detect_grasps",
+                "grounded_sam2",
                 "move_arm_joints",
                 "observe",
                 "send_action",
@@ -152,7 +158,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             )
             reply = session.reply("inspect robot state")
 
-            self.assertIn("Handler completed this turn.", reply)
+            self.assertIn("机器人连接看起来是通的", reply)
             self.assertTrue(state_path.is_file())
             self.assertEqual(len(session.messages), 2)
             self.assertTrue(Path(session.last_result.workspace).is_dir())
@@ -189,6 +195,115 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertTrue((root / "state" / "test-session.jsonl").is_file())
 
+    def test_chat_cli_defaults_to_remote_robot_client(self) -> None:
+        captured = {}
+
+        class _FakeChatSession:
+            def __init__(self, *, platform, **kwargs):
+                captured["remote_ip"] = platform.config.remote_ip
+
+            def reply(self, text, *, progress=None):
+                return "ok"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(cli_module, "HandlerChatSession", _FakeChatSession):
+                code = main(
+                    [
+                        "chat",
+                        "--local-agents",
+                        "--state-dir",
+                        str(Path(tmp) / "state"),
+                        "--workspace-root",
+                        str(Path(tmp) / "workspaces"),
+                        "--once",
+                        "inspect robot state",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertEqual(captured["remote_ip"], cli_module.DEFAULT_REMOTE_IP)
+
+    def test_handler_chat_agent_can_answer_capability_question_directly(self) -> None:
+        class _ExplodingPlatform(DryRunPlatform):
+            def connect(self) -> None:
+                raise AssertionError("direct chat answer should not connect platform")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+            fake = _FakeSubagentClient()
+            session = HandlerChatSession(
+                handler=Handler(workspace_root=Path(tmp) / "workspaces", agent_client=fake),
+                platform=_ExplodingPlatform(),
+                state_path=Path(tmp) / "handler-chat.jsonl",
+            )
+            reply = session.reply("嗨 你现在能干嘛", progress=events.append)
+
+        self.assertEqual(reply, "fake direct capability answer")
+        self.assertEqual(fake.roles, ["handler"])
+        self.assertIn("handler agent answered directly", events[-1])
+        self.assertEqual(session.last_result.trace, [])
+
+    def test_successful_handler_reply_hides_internal_auditor_fields(self) -> None:
+        result = RunResult(
+            task="check connection",
+            workspace="/tmp/workspace",
+            plan=Plan(task="check connection", goal="check robot"),
+            trace=[
+                TraceStep(
+                    index=1,
+                    skill="observe",
+                    args={"include_images": False, "include_state": True},
+                    result={"ok": True, "observation": {"state_keys": ["x.vel"], "images": {}, "extras": {}}},
+                    ok=True,
+                ),
+                TraceStep(
+                    index=2,
+                    skill="capture_image",
+                    args={"camera": "front", "required": False},
+                    result={
+                        "ok": True,
+                        "captured": True,
+                        "camera": "front",
+                        "image": {"shape": (480, 640, 3), "dtype": "uint8"},
+                    },
+                    ok=True,
+                ),
+            ],
+            review={
+                "verdict": "done",
+                "next_action": "Tell the user in Chinese that the robot connection appears live.",
+                "research_questions": ["If observe fails, what should be inspected next?"],
+                "used_skills": ["observe", "capture_image"],
+                "used_control_skills": [],
+                "sim_leak": [],
+                "success": True,
+            },
+            success=True,
+        )
+
+        reply = format_handler_reply(result)
+
+        self.assertIn("机器人连接看起来是通的", reply)
+        self.assertNotIn("Tell the user", reply)
+        self.assertNotIn("If observe fails", reply)
+        self.assertNotIn("还需要你补充", reply)
+
+    def test_handler_returns_fixable_worker_failure_to_strategist(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = _RetrySubagentClient()
+            result = Handler(workspace_root=Path(tmp), agent_client=fake).run(
+                task="oscillate left joint5",
+                user_request="oscillate left joint5",
+                platform=DryRunPlatform(),
+            )
+
+        self.assertTrue(result.success)
+        self.assertGreaterEqual(fake.roles.count("strategist"), 2)
+        self.assertTrue(any("failure trace returned to strategist" in note for note in result.notes))
+        move_steps = [step for step in result.trace if step.skill == "move_arm_joints"]
+        self.assertEqual(len(move_steps), 1)
+        self.assertEqual(move_steps[0].args["side"], "left")
+
     def test_hei_observation_split(self) -> None:
         raw = {
             "front": _FakeImage((480, 640, 3)),
@@ -201,6 +316,57 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(obs.state["left_joint_1.pos"], 0.25)
         self.assertEqual(obs.state["height.pos"], -10.0)
         self.assertEqual(obs.extras["status"], "ok")
+
+    def test_observe_skill_returns_numeric_state_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            platform = DryRunPlatform()
+            platform.state["left_joint_5.pos"] = 0.25
+            context = SkillContext(platform=platform, workspace=_FakeWorkspace(Path(tmp)))
+            result = SkillRegistry(include_user=False).dispatch(
+                "observe",
+                context,
+                {"include_images": False, "include_state": True},
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["observation"]["state"]["left_joint_5.pos"], 0.25)
+        self.assertIn("left_joint_5.pos", result["observation"]["state_keys"])
+
+    def test_reviewer_skill_update_applies_only_skill_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            skill_dir = root / "base" / "perception" / "toy"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: toy\ndescription: toy\ncategory: base/perception\n---\n\n# Toy\n",
+                encoding="utf-8",
+            )
+            (skill_dir / "policy.py").write_text(
+                "def dispatch(context, args):\n    return {'ok': True, 'value': 1}\n",
+                encoding="utf-8",
+            )
+            registry = SkillRegistry(roots=[root], include_user=False)
+            workspace = _FakeWorkspace(Path(tmp))
+            review = {
+                "skill_updates": [
+                    {
+                        "skill_name": "toy",
+                        "rationale": "test update",
+                        "files": [
+                            {
+                                "path": "policy.py",
+                                "content": "def dispatch(context, args):\n    return {'ok': True, 'value': 2}\n",
+                            },
+                            {"path": "../escape.py", "content": "x = 1\n"},
+                        ],
+                    }
+                ]
+            }
+
+            results = apply_review_skill_updates(review, skills=registry, workspace=workspace)
+
+        self.assertFalse(results[0].ok)
+        self.assertIn("unsupported skill file path", results[0].rejected[0])
 
     def test_hei_platform_component_interfaces_use_local_actions(self) -> None:
         robot = _FakeHeiRobot()
@@ -235,6 +401,22 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("AnyGrasp detection directory not found", result["error"])
+
+    def test_grounded_sam2_skill_reports_missing_repo_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            missing_repo = Path(tmp) / "missing_grounded_sam2"
+            context = SkillContext(platform=DryRunPlatform(), workspace=_FakeWorkspace(Path(tmp)))
+            result = SkillRegistry(include_user=False).dispatch(
+                "grounded_sam2",
+                context,
+                {
+                    "check_only": True,
+                    "repo_root": str(missing_repo),
+                },
+            )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("Grounded-SAM2 repo not found", result["error"])
 
 
 class _FakeImage:
@@ -284,7 +466,10 @@ class _FakeSubagentClient:
         payload = json.loads(prompt)
         codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
         if role == "handler":
+            direct = "你现在能干嘛" in str(payload["user_request"])
             return {
+                "route": "direct_response" if direct else "strategist",
+                "direct_response": "fake direct capability answer" if direct else "",
                 "run_intent": payload["task"],
                 "handoff_notes": ["fake handler handoff"],
                 "safety_notes": ["fake safety"],
@@ -318,9 +503,46 @@ class _FakeSubagentClient:
             return {
                 **review,
                 "notes": ["fake auditor review"],
+                "skill_updates": [],
+                "skill_proposals": [],
                 "_codex": codex,
             }
         raise AssertionError(f"unexpected role {role}")
+
+
+class _RetrySubagentClient(_FakeSubagentClient):
+    def __init__(self) -> None:
+        super().__init__()
+        self.strategist_calls = 0
+
+    def run_json(self, *, role: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+        if role != "strategist":
+            return super().run_json(role=role, prompt=prompt, schema=schema)
+
+        self.roles.append(role)
+        self.strategist_calls += 1
+        payload = json.loads(prompt)
+        codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+        bad_args = {"arm": "left", "positions": {"joint_5": 0.5}}
+        good_args = {"side": "left", "positions": {"joint_5": 0.5}}
+        args = good_args if "failed_trace" in payload else bad_args
+        return {
+            "goal": payload["user_request"],
+            "steps": [
+                {"name": "move_arm_joints", "args_json": json.dumps(args), "why": "test retry"},
+                {
+                    "name": "stop_motion",
+                    "args_json": json.dumps({"reason": "test end"}),
+                    "why": "safety stop",
+                },
+            ],
+            "success_criteria": ["test retry succeeds"],
+            "risks": [],
+            "assumptions": [],
+            "research_questions": [],
+            "subagent_notes": ["fake strategist retry plan" if "failed_trace" in payload else "fake bad plan"],
+            "_codex": codex,
+        }
 
 
 if __name__ == "__main__":

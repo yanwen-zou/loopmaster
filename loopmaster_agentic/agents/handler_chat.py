@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -90,7 +91,7 @@ class HandlerChatSession:
             if hasattr(self.handler, "clear_agent_sessions"):
                 self.handler.clear_agent_sessions()
 
-    def reply(self, text: str) -> str:
+    def reply(self, text: str, *, progress: Callable[[str], None] | None = None) -> str:
         text = text.strip()
         if not text:
             return ""
@@ -107,7 +108,7 @@ class HandlerChatSession:
             user_message = HandlerChatMessage(role="user", content=text)
             self._append_unlocked(user_message)
 
-            result = self.handler.run(task=text, user_request=text, platform=self.platform)
+            result = self.handler.run(task=text, user_request=text, platform=self.platform, progress=progress)
             self.last_result = result
             content = format_handler_reply(result)
             self._append_unlocked(
@@ -152,26 +153,65 @@ class HandlerChatSession:
 
 def format_handler_reply(result: RunResult) -> str:
     review = result.review
+    response = review.get("response")
+    if response:
+        return str(response)
+
     verdict = str(review.get("verdict", "unknown"))
-    used_skills = ", ".join(review.get("used_skills") or []) or "(none)"
-    lines = [
-        "Handler completed this turn.",
-        f"- verdict: `{verdict}`",
-        f"- success: `{result.success}`",
-        f"- workspace: `{result.workspace}`",
-        f"- used skills: {used_skills}",
-    ]
-    next_action = str(review.get("next_action") or "")
-    if next_action:
-        lines.append(f"- next action: {next_action}")
-    research_questions = review.get("research_questions") or []
-    if research_questions:
-        lines.append("- research needed:")
-        lines.extend(f"  - {item}" for item in research_questions)
-    if result.notes:
-        lines.append("- codex agents:")
-        lines.extend(f"  - {item}" for item in result.notes)
+    used_skills = review.get("used_skills") or []
+    if result.success:
+        summary = _success_summary(result)
+        lines = [summary or "已完成。"]
+        if used_skills:
+            lines.append(f"本轮调用了：{', '.join(used_skills)}。")
+        else:
+            lines.append("本轮没有调用机器人 skill。")
+    else:
+        root_cause = str(review.get("root_cause") or "任务没有完成")
+        lines = [f"这轮没有完成：{root_cause}。"]
+        research_questions = review.get("research_questions") or []
+        if research_questions:
+            lines.append("还需要你补充：")
+            lines.extend(f"- {item}" for item in research_questions)
+        next_action = str(review.get("next_action") or "")
+        if next_action:
+            lines.append(f"下一步：{next_action}")
+    if result.trace:
+        lines.append("")
+        lines.append("本轮 skill 调用：")
+        for step in result.trace:
+            status = "ok" if step.ok else "failed"
+            lines.append(f"- `{step.skill}` {status}")
+    lines.append("")
+    lines.append(f"工作区：`{result.workspace}`")
+    if verdict != "done":
+        lines.append(f"状态：`{verdict}`")
     return "\n".join(lines)
+
+
+def _success_summary(result: RunResult) -> str:
+    observe_step = next((step for step in result.trace if step.skill == "observe" and step.ok), None)
+    capture_step = next((step for step in result.trace if step.skill == "capture_image" and step.ok), None)
+    if observe_step is not None and capture_step is not None:
+        state_keys = (
+            observe_step.result
+            .get("observation", {})
+            .get("state_keys", [])
+        )
+        image = capture_step.result.get("image", {})
+        shape = image.get("shape")
+        dtype = image.get("dtype")
+        camera = capture_step.result.get("camera", "front")
+        state_text = "状态读取成功" if state_keys else "连接检查成功"
+        if shape and dtype:
+            return f"机器人连接看起来是通的：{state_text}，{camera} 相机返回了 {tuple(shape)} {dtype} 图像。"
+        return f"机器人连接看起来是通的：{state_text}，{camera} 相机也有返回。"
+    if observe_step is not None:
+        state_keys = observe_step.result.get("observation", {}).get("state_keys", [])
+        if state_keys:
+            return "机器人连接看起来是通的：已经成功读取到本体状态。"
+        return "机器人连接看起来是通的：observe 调用成功。"
+    return ""
 
 
 def _result_metadata(result: RunResult) -> dict[str, Any]:

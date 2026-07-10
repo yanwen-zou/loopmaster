@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Keyboard-control HEI ReBot Lift through LoopMaster control skills."
     )
     parser.add_argument("--dry-run", action="store_true", help="Use in-memory platform instead of hardware.")
-    parser.add_argument("--remote-ip", default="172.16.22.19", help="Use HEI ReBot Lift host/client mode.")
+    parser.add_argument("--remote-ip", default="192.168.31.22", help="Use HEI ReBot Lift host/client mode.")
     parser.add_argument("--robot-id", default="hei_rebot_lift")
     parser.add_argument("--lerobot-src", type=Path, default=None)
     parser.add_argument("--yes", action="store_true", help="Allow real hardware motion.")

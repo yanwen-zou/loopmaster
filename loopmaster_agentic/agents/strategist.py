@@ -55,11 +55,24 @@ class Strategist:
                 )
             )
 
+        object_conditioned_grasp = _wants_object_conditioned_grasp(lowered)
+        if "grounded_sam2" in available and object_conditioned_grasp:
+            steps.append(
+                SkillCall(
+                    "grounded_sam2",
+                    {"text_prompt": _requested_object_prompt(text)},
+                    "segment the requested object before grasp detection",
+                )
+            )
+
         if "detect_grasps" in available and _wants_grasp_detection(lowered):
+            grasp_args: dict[str, Any] = {"check_only": _wants_anygrasp_check_only(lowered), "top_k": 5}
+            if object_conditioned_grasp:
+                grasp_args["region_object_id"] = 1
             steps.append(
                 SkillCall(
                     "detect_grasps",
-                    {"check_only": _wants_anygrasp_check_only(lowered), "top_k": 5},
+                    grasp_args,
                     "run AnyGrasp grasp perception or readiness check",
                 )
             )
@@ -124,6 +137,41 @@ class Strategist:
                 encoding="utf-8",
             )
             plan = _plan_from_agent(agent_plan, fallback=plan, available=available)
+        workspace.write_plan(plan.to_markdown())
+        return plan
+
+    def replan_after_failure(
+        self,
+        *,
+        task: str,
+        user_request: str,
+        workspace: Workspace,
+        skills: SkillRegistry,
+        previous_plan: Plan,
+        trace: list[Any],
+        agent_client: SubagentClient | None = None,
+    ) -> Plan:
+        if agent_client is None:
+            return previous_plan
+
+        discovered_skills = skills.list()
+        available = {skill.name for skill in discovered_skills}
+        agent_plan = agent_client.run_json(
+            role=self.role_name,
+            prompt=_strategist_retry_prompt(
+                task=task,
+                user_request=user_request,
+                skills=discovered_skills,
+                previous_plan=_plan_to_dict(previous_plan),
+                trace=[step.to_dict() for step in trace],
+            ),
+            schema=_PLAN_SCHEMA,
+        )
+        (workspace.root / "strategist_retry_agent.json").write_text(
+            json.dumps(agent_plan, indent=2, ensure_ascii=False, default=str) + "\n",
+            encoding="utf-8",
+        )
+        plan = _plan_from_agent(agent_plan, fallback=previous_plan, available=available)
         workspace.write_plan(plan.to_markdown())
         return plan
 
@@ -195,6 +243,48 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
             for skill in skills
         ],
         "candidate_plan": candidate_plan,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _strategist_retry_prompt(
+    *,
+    task: str,
+    user_request: str,
+    skills: list[Any],
+    previous_plan: dict[str, Any],
+    trace: list[dict[str, Any]],
+) -> str:
+    payload = {
+        "role": "strategist",
+        "contract": (
+            "You are the LoopMaster Strategist retry pass. The previous worker execution failed. "
+            "Inspect the trace, correct fixable skill argument/schema mistakes, and return a revised "
+            "registry-grounded plan. Use only the provided skill names and each skill's documented args. "
+            "Do not ask the user to fix schema mismatches that you can correct. Keep stop_motion at the "
+            "end when any control skill appears. If the failure is caused by a repository-local "
+            "skill output or documentation defect, identify that skill repair in risks or "
+            "subagent_notes instead of turning it into a user research question. Return only JSON "
+            "matching the schema."
+        ),
+        "task": task,
+        "user_request": user_request,
+        "available_skills": [
+            {
+                "name": skill.name,
+                "category": skill.category,
+                "description": skill.description,
+                "args": skill.frontmatter.get("args", {}),
+                "is_user": skill.is_user,
+            }
+            for skill in skills
+        ],
+        "previous_plan": previous_plan,
+        "failed_trace": trace,
+        "retry_guidance": (
+            "For move_arm_joints use args {\"side\": \"left\"|\"right\", \"positions\": {...}} "
+            "or positions as a 7-value numeric array. Do not use arm=... ."
+        ),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
@@ -311,6 +401,29 @@ def _wants_grasp_detection(text: str) -> bool:
     return any(item in text for item in keywords)
 
 
+def _wants_object_conditioned_grasp(text: str) -> bool:
+    if not _wants_grasp_detection(text):
+        return False
+    return _mentions_any(
+        text,
+        (
+            "mask",
+            "segment",
+            "segmentation",
+            "grounded sam",
+            "grounded-sam",
+            "sam2",
+            "object",
+            "target",
+            "物体",
+            "目标",
+            "分割",
+            "掩码",
+            "mask指定",
+        ),
+    )
+
+
 def _wants_anygrasp_check_only(text: str) -> bool:
     keywords = ("check", "test", "dry run", "readiness", "测试", "检查", "自检")
     return any(item in text for item in keywords)
@@ -322,6 +435,24 @@ def _requested_camera(text: str) -> str:
     if "right_wrist" in text or "right wrist" in text or "右腕" in text:
         return "right_wrist"
     return "front"
+
+
+def _requested_object_prompt(text: str) -> str:
+    prompt = _extract_quoted(text)
+    if prompt:
+        return prompt
+    for key in ("object", "target", "prompt", "text_prompt", "物体", "目标"):
+        match = re.search(rf"{re.escape(key)}\s*[:=]\s*([^,;，。]+)", text, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).strip()
+    return "object."
+
+
+def _extract_quoted(text: str) -> str | None:
+    match = re.search(r"['\"]([^'\"]+)['\"]", text)
+    if match:
+        return match.group(1).strip()
+    return None
 
 
 def _maybe_add_base_velocity(

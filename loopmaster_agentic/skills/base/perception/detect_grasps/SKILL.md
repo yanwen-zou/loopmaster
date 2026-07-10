@@ -13,6 +13,7 @@ args:
   color_path: string
   depth_path: string
   seg_mask_path: string
+  region_mask_path: string
   top_k: int
   dense_grasp: bool
   collision_detection: bool
@@ -31,3 +32,10 @@ dependencies are missing, the skill returns `status.missing_packages`.
 The skill accepts either `points_path` containing an `Nx3` numpy point cloud, or
 RGB-D inputs through `data_dir`/`color_path`/`depth_path`. If no data path is
 provided it uses AnyGrasp's bundled `grasp_detection/example_data`.
+
+To restrict grasps to a segmented object, pass a label image with
+`seg_mask_path` and select a label with `region_object_id`. This is the direct
+output contract of the `grounded_sam2` skill: use
+`grounded_sam2.seg_mask_path` with `region_object_id=1` for the first detected
+object. A binary `region_mask_path` is also accepted; it is interpreted as a 2D
+image mask and filtered with the same valid-depth mask as the point cloud.

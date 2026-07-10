@@ -97,6 +97,8 @@ _AUDITOR_SCHEMA: dict[str, Any] = {
         "research_questions": {"type": "array", "items": {"type": "string"}},
         "success": {"type": "boolean"},
         "notes": {"type": "array", "items": {"type": "string"}},
+        "skill_updates": {"type": "array", "items": {"type": "object"}},
+        "skill_proposals": {"type": "array", "items": {"type": "object"}},
     },
     "required": [
         "verdict",
@@ -108,6 +110,8 @@ _AUDITOR_SCHEMA: dict[str, Any] = {
         "research_questions",
         "success",
         "notes",
+        "skill_updates",
+        "skill_proposals",
     ],
     "additionalProperties": False,
 }
@@ -119,7 +123,17 @@ def _auditor_prompt(*, plan: Plan, trace: list[TraceStep], candidate_review: dic
         "contract": (
             "You are the LoopMaster Auditor subagent. Independently review the plan and trace. "
             "Do not execute tools or edit files. Classify the run as done, retry, blocked, or "
-            "research_needed. Return only JSON matching the schema."
+            "research_needed. Do not ask the user for information that is available in the "
+            "repository or in skill implementations; classify repository-local skill/schema/"
+            "trace-output defects as retry or blocked with a concrete skill repair next_action. "
+            "When a repository-local skill defect can be repaired from the trace and known skill "
+            "contract, include a skill_proposals entry. Use kind='update_skill' for existing "
+            "registered skills and kind='new_skill' for a new user skill under LOOPMASTER_SKILL_ROOT. "
+            "Each proposal must include complete replacement content for SKILL.md and/or policy.py; "
+            "new_skill proposals must include both files. "
+            "Reserve research_needed for missing task intent, external runtime state, hardware "
+            "safety approval, or genuinely absent learned capabilities. Return only JSON "
+            "matching the schema."
         ),
         "plan": {
             "task": plan.task,
@@ -129,6 +143,18 @@ def _auditor_prompt(*, plan: Plan, trace: list[TraceStep], candidate_review: dic
         },
         "trace": [step.to_dict() for step in trace],
         "candidate_review": candidate_review,
+        "skill_proposal_schema": {
+            "kind": "update_skill or new_skill",
+            "skill_name": "registered skill name",
+            "category": "required for new_skill; e.g. learned/control",
+            "rationale": "why this skill should change",
+            "files": [
+                {
+                    "path": "SKILL.md or policy.py only",
+                    "content": "complete replacement file content",
+                }
+            ],
+        },
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
@@ -148,6 +174,8 @@ def _review_from_agent(data: dict[str, Any], *, fallback: dict[str, Any]) -> dic
         "research_questions": _strings(data.get("research_questions"))
         or list(fallback.get("research_questions") or []),
         "success": bool(data.get("success")) and verdict == "done",
+        "skill_updates": _skill_updates(data.get("skill_updates")),
+        "skill_proposals": _skill_updates(data.get("skill_proposals")),
     }
     codex = data.get("_codex")
     if isinstance(codex, dict):
@@ -162,6 +190,12 @@ def _strings(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value]
+
+
+def _skill_updates(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _review_markdown(plan: Plan, review: dict[str, Any]) -> str:

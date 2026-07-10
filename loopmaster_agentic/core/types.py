@@ -19,6 +19,7 @@ class Observation:
             "images": {
                 name: _image_summary(image) for name, image in self.images.items()
             },
+            "state": {key: float(value) for key, value in sorted(self.state.items())},
             "state_keys": sorted(self.state),
             "timestamp": self.timestamp,
             "extras": self.extras,

@@ -23,6 +23,8 @@ from loopmaster_agentic.platform.hei_rebot_lift import (
     HeiRebotLiftPlatformConfig,
 )
 
+DEFAULT_REMOTE_IP = "192.168.31.22"
+
 
 def main(argv: list[str] | None = None) -> int:
     raw_argv = list(sys.argv[1:] if argv is None else argv)
@@ -32,7 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run the LoopMaster handler-led real-robot loop.")
     parser.add_argument("task", help="Natural-language task request.")
     parser.add_argument("--dry-run", action="store_true", help="Use in-memory platform for framework smoke checks.")
-    parser.add_argument("--remote-ip", default=None, help="HEI ReBot Lift host IP for real robot client mode.")
+    parser.add_argument("--remote-ip", default=DEFAULT_REMOTE_IP, help="HEI ReBot Lift host IP for real robot client mode.")
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--agent-profile", default=_default_agent_profile(), help="Codex profile for all four subagents.")
     parser.add_argument("--agent-timeout", type=int, default=600, help="Seconds to wait for each Codex subagent turn.")
@@ -58,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
 def _chat_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Open a persistent terminal chat with the LoopMaster Handler.")
     parser.add_argument("--dry-run", action="store_true", help="Use in-memory platform for safe smoke checks.")
-    parser.add_argument("--remote-ip", default=None, help="HEI ReBot Lift host IP for real robot client mode.")
+    parser.add_argument("--remote-ip", default=DEFAULT_REMOTE_IP, help="HEI ReBot Lift host IP for real robot client mode.")
     parser.add_argument("--workspace-root", type=Path, default=None)
     parser.add_argument("--session-id", default=DEFAULT_SESSION_ID, help="Persistent handler chat session key.")
     parser.add_argument("--state-dir", type=Path, default=None, help="Directory for chat JSONL state.")
@@ -143,7 +145,7 @@ def _run_handler_chat_tui(session: HandlerChatSession) -> None:
             print(f"you: {message}")
             print("handler: running...")
             try:
-                reply = session.reply(message)
+                reply = session.reply(message, progress=lambda event: print(f"  {event}"))
             except Exception as exc:  # pragma: no cover - interactive safety path.
                 reply = f"Handler failed: {type(exc).__name__}: {exc}"
             print(f"\nhandler:\n{reply}\n")
@@ -152,8 +154,12 @@ def _run_handler_chat_tui(session: HandlerChatSession) -> None:
         console, panel, markdown, text = rich
         console.print(text(f"you: {message}", style="grey50"))
         try:
-            with console.status("[cyan]handler running...", spinner="dots"):
-                reply = session.reply(message)
+            with console.status("[cyan]handler running...", spinner="dots") as status:
+                def _show_progress(event: str) -> None:
+                    status.update(text(event, style="cyan"))
+                    console.print(text(f"  {event}", style="grey50"))
+
+                reply = session.reply(message, progress=_show_progress)
         except Exception as exc:  # pragma: no cover - interactive safety path.
             reply = f"Handler failed: {type(exc).__name__}: {exc}"
         console.print(panel(markdown(reply), border_style="cyan", title="handler", title_align="left"))

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from typing import Any
 
 from loopmaster_agentic.agents.codex_subagent import SubagentClient
@@ -23,6 +24,7 @@ class Worker:
         platform: RobotPlatform,
         skills: SkillRegistry,
         agent_client: SubagentClient | None = None,
+        progress: Callable[[str], None] | None = None,
     ) -> list[TraceStep]:
         worker_agent: dict[str, Any] | None = None
         if agent_client is not None:
@@ -42,6 +44,8 @@ class Worker:
         context = SkillContext(platform=platform, workspace=workspace)
         trace: list[TraceStep] = []
         for call in plan.steps:
+            if progress is not None:
+                progress(f"skill `{call.name}` args={call.args}")
             step = _execute_call(
                 call.name,
                 call.args,
@@ -52,8 +56,15 @@ class Worker:
                 workspace,
                 role=self.role_name,
             )
+            if progress is not None:
+                if step.ok:
+                    progress(f"skill `{call.name}` ok=True")
+                else:
+                    progress(f"skill `{call.name}` failed: {_short_error(step.result)}")
             if not step.ok:
                 if call.name != "stop_motion" and skills.get("stop_motion") is not None:
+                    if progress is not None:
+                        progress("skill `stop_motion` args={'reason': safety abort}")
                     _execute_call(
                         "stop_motion",
                         {"reason": f"worker abort after failed {call.name}"},
@@ -66,6 +77,8 @@ class Worker:
                     )
                 break
             if _is_control_skill(call.name) and skills.get("observe") is not None:
+                if progress is not None:
+                    progress("skill `observe` args={'include_images': True, 'include_state': True}")
                 post = _execute_call(
                     "observe",
                     {"include_images": True, "include_state": True},
@@ -76,6 +89,11 @@ class Worker:
                     workspace,
                     role="worker.monitor",
                 )
+                if progress is not None:
+                    if post.ok:
+                        progress("skill `observe` ok=True")
+                    else:
+                        progress(f"skill `observe` failed: {_short_error(post.result)}")
                 if not post.ok:
                     break
         workspace.write_summary(_summary_markdown(plan, trace, worker_agent=worker_agent))
@@ -119,6 +137,11 @@ def _is_control_skill(name: str) -> bool:
         "set_base_velocity",
         "set_lift_height",
     }
+
+
+def _short_error(result: dict[str, Any]) -> str:
+    text = str(result.get("error") or result)
+    return text if len(text) <= 240 else text[:237] + "..."
 
 
 _WORKER_SCHEMA: dict[str, Any] = {
