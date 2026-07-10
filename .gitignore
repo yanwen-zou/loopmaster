@@ -6,3 +6,7 @@ __pycache__/
 *.py[cod]
 dependencies/
 loopmaster-linux.tar.gz
+
+*.png
+_vis_runs/
+_grasp_runs/
