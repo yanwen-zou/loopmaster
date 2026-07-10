@@ -34,6 +34,11 @@ Arm joints:
   o: refresh selected arm positions from observation
 """
 
+ARM_SIDE_KEYS = {
+    "l": "left",
+    "r": "right",
+}
+
 
 @dataclass
 class TeleopState:
@@ -167,8 +172,8 @@ def _handle_key(
         _dispatch(registry, context, "stop_motion", {"reason": "keyboard stop"})
         print("\rbase stopped                                      ", end="", flush=True)
         return
-    if lowered in ARM_SIDES:
-        state.side = lowered
+    if lowered in ARM_SIDE_KEYS:
+        state.side = ARM_SIDE_KEYS[lowered]
         _print_status(state)
         return
     if key in {"1", "2", "3", "4", "5", "6", "7"}:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 import tempfile
@@ -13,6 +14,7 @@ from loopmaster_agentic.cli import main
 from loopmaster_agentic.platform.dry_run import DryRunPlatform
 from loopmaster_agentic.platform.hei_rebot_lift import HeiRebotLiftPlatform, split_hei_observation
 from loopmaster_agentic.skills.registry import SkillContext, SkillRegistry
+from keyboard_control import TeleopState, _handle_key
 
 
 class LoopMasterAgenticTests(unittest.TestCase):
@@ -72,6 +74,16 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         gripper_sent = platform.set_gripper("right", 99.0)
         self.assertEqual(gripper_sent["right_gripper.pos"], 0.0)
+
+    def test_keyboard_l_and_r_select_arm_side(self) -> None:
+        state = TeleopState()
+        args = argparse.Namespace(linear_speed=0.05, angular_speed=0.15)
+
+        _handle_key("l", args, None, None, state)
+        self.assertEqual(state.side, "left")
+
+        _handle_key("r", args, None, None, state)
+        self.assertEqual(state.side, "right")
 
     def test_dry_run_handler_executes_four_role_loop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
