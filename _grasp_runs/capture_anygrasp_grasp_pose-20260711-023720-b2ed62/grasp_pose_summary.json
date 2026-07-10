@@ -1,0 +1,278 @@
+{
+  "workspace": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62",
+  "mode": "anygrasp",
+  "rgb_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/captures/d435_frame_003579_rgb.png",
+  "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/captures/d435_frame_003579_depth.png",
+  "debug_image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/top_grasp_debug.png",
+  "extrinsics_path": "/home/yanwen/research/agentic/loopmaster/loopmaster_agentic/config/head_camera_extrinsics.json",
+  "camera_to_object": [
+    [
+      0.07559296488761902,
+      -0.9657150506973267,
+      -0.24835477769374847,
+      -0.08464348316192627
+    ],
+    [
+      0.2812020480632782,
+      0.2596043050289154,
+      -0.923867404460907,
+      -0.05162816494703293
+    ],
+    [
+      0.9566666483879089,
+      0.0,
+      0.29118531942367554,
+      0.42900002002716064
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_grasp_pose": [
+    [
+      0.721861441412966,
+      0.22482392308684504,
+      -0.6544999822797004,
+      0.19978870761867654
+    ],
+    [
+      0.07559296488761902,
+      -0.9657150506973267,
+      -0.24835477769374847,
+      0.17535651683807374
+    ],
+    [
+      -0.6878965964256053,
+      0.1298021525144577,
+      -0.7141075860604428,
+      -0.057338998041070455
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_pose": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.19978870761867654
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.17535651683807374
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.09266100195892954
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_z_offset_m": 0.15,
+  "target_rotation": "fixed",
+  "move_arm_ee_args": {
+    "side": "right",
+    "input_frame": "arm",
+    "pose": {
+      "position": [
+        0.19978870761867654,
+        0.17535651683807374,
+        0.09266100195892954
+      ]
+    },
+    "execute": false,
+    "max_joint_step": 0.05,
+    "step_dt": 0.08,
+    "hold_s": 0.0,
+    "orientation_cost": 0.1,
+    "preserve_current_orientation": true
+  },
+  "arm_init_config": "/home/yanwen/research/agentic/loopmaster/loopmaster_agentic/config/arm_init_pose.json",
+  "init_arm_positions": null,
+  "init_arm_results": [],
+  "move_arm_ee_result": {
+    "ok": true,
+    "side": "right",
+    "executed": false,
+    "ik_success": true,
+    "positions": {
+      "joint_1": 1.4898616918364016,
+      "joint_2": -1.8745859738699466,
+      "joint_3": -0.13526793230511308,
+      "joint_4": -1.1216378840798233,
+      "joint_5": 1.4927123609387323,
+      "joint_6": 0.6096438556053192,
+      "gripper": 0.0
+    },
+    "action_sent": {},
+    "trajectory": [],
+    "target_arm_pose": [
+      [
+        0.9999999999730146,
+        3.403357154380486e-10,
+        -7.346411273533663e-06,
+        0.19978870761867654
+      ],
+      [
+        3.9430541239490695e-10,
+        0.9999999949999995,
+        9.99999998321997e-05,
+        0.17535651683807374
+      ],
+      [
+        7.346411270835179e-06,
+        -9.999999983239795e-05,
+        0.9999999949730146,
+        0.09266100195892954
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "target_camera_pose": null,
+    "transform": null,
+    "ik_info": {
+      "backend": "mink",
+      "solver": "daqp",
+      "iterations": 4,
+      "position_error_m": 0.007248088950015288,
+      "task_position_error_m": 0.007248697074148912,
+      "orientation_cost": 0.1,
+      "preserve_current_orientation": true,
+      "target_world_position": [
+        0.19978870761867654,
+        -0.05464348316192627,
+        0.09266100195892954
+      ],
+      "reached_world_position": [
+        0.19716640506464167,
+        -0.05973423745849106,
+        0.08821774375863968
+      ]
+    },
+    "orientation_cost": 0.1
+  },
+  "move_arm_ee_error": null,
+  "post_move_arm_positions": null,
+  "camera_params": {
+    "source": "/home/yanwen/research/agentic/loopmaster/hei-rebot-lift/software/lerobot-hei-rebot-lift/src/lerobot/cameras/d435_intrinsics_640x480.json",
+    "fx": 607.03662109375,
+    "fy": 606.8038940429688,
+    "cx": 316.76116943359375,
+    "cy": 242.75991821289062,
+    "depth_scale": 999.999952502551,
+    "depth_scale_m": 0.0010000000474974513,
+    "width": 640,
+    "height": 480
+  },
+  "top_grasp": {
+    "index": 0,
+    "score": 0.10726107656955719,
+    "width": 0.10000000149011612,
+    "height": 0.029999999329447746,
+    "depth": 0.029999999329447746,
+    "translation": [
+      -0.08464348316192627,
+      -0.05162816494703293,
+      0.42900002002716064
+    ],
+    "rotation_matrix": [
+      [
+        0.07559296488761902,
+        -0.9657150506973267,
+        -0.24835477769374847
+      ],
+      [
+        0.2812020480632782,
+        0.2596043050289154,
+        -0.923867404460907
+      ],
+      [
+        0.9566666483879089,
+        0.0,
+        0.29118531942367554
+      ]
+    ],
+    "object_id": -1.0
+  },
+  "grounded_sam2_result": {
+    "ok": true,
+    "status": {
+      "repo_root": "/home/yanwen/research/agentic/loopmaster/third_party/Grounded-SAM-2",
+      "python": "/home/yanwen/research/agentic/loopmaster/.venv/bin/python",
+      "dependencies": {
+        "cv2": {
+          "ok": true,
+          "version": "5.0.0"
+        },
+        "numpy": {
+          "ok": true,
+          "version": "2.3.5"
+        },
+        "PIL": {
+          "ok": true,
+          "version": "12.3.0"
+        },
+        "torch": {
+          "ok": true,
+          "version": "2.11.0+cu128"
+        },
+        "supervision": {
+          "ok": true,
+          "version": "0.29.1"
+        },
+        "transformers": {
+          "ok": true,
+          "version": "5.13.0"
+        },
+        "pycocotools": {
+          "ok": true,
+          "version": ""
+        }
+      }
+    },
+    "image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/captures/d435_frame_003579_rgb.png",
+    "text_prompt": "yellow bread.",
+    "output_dir": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/grounded_sam2",
+    "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/grounded_sam2/seg_mask.png",
+    "annotation_count": 1,
+    "annotations": [
+      {
+        "label_id": 1,
+        "class_name": "yellow bread",
+        "grounding_score": 0.4685474932193756,
+        "sam_score": 0.9375,
+        "bbox_xyxy": [
+          174.92706298828125,
+          158.35549926757812,
+          239.92343139648438,
+          209.63006591796875
+        ],
+        "mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/grounded_sam2/mask_001.png",
+        "area_pixels": 2230
+      }
+    ],
+    "anygrasp_hint": {
+      "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023720-b2ed62/grounded_sam2/seg_mask.png",
+      "region_object_id": 1
+    }
+  }
+}

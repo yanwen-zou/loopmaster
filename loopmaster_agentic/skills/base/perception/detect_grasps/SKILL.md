@@ -39,3 +39,7 @@ output contract of the `grounded_sam2` skill: use
 `grounded_sam2.seg_mask_path` with `region_object_id=1` for the first detected
 object. A binary `region_mask_path` is also accepted; it is interpreted as a 2D
 image mask and filtered with the same valid-depth mask as the point cloud.
+
+If `color_path` and `depth_path` are omitted and `capture_image` already ran,
+the skill uses `context.memory["capture_image"]["rgb"]["path"]` and
+`context.memory["capture_image"]["depth"]["path"]`.

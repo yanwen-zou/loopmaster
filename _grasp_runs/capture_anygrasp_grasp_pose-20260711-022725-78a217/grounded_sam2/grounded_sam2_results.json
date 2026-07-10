@@ -1,0 +1,27 @@
+{
+  "image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-022725-78a217/captures/d435_frame_000850_rgb.png",
+  "text_prompt": "bread.",
+  "output_dir": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-022725-78a217/grounded_sam2",
+  "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-022725-78a217/grounded_sam2/seg_mask.png",
+  "annotation_count": 1,
+  "annotations": [
+    {
+      "label_id": 1,
+      "class_name": "bread",
+      "grounding_score": 0.43254271149635315,
+      "sam_score": 0.984375,
+      "bbox_xyxy": [
+        301.3976745605469,
+        85.36836242675781,
+        428.81640625,
+        251.6269073486328
+      ],
+      "mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-022725-78a217/grounded_sam2/mask_001.png",
+      "area_pixels": 15330
+    }
+  ],
+  "anygrasp_hint": {
+    "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-022725-78a217/grounded_sam2/seg_mask.png",
+    "region_object_id": 1
+  }
+}

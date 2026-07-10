@@ -12,12 +12,18 @@ The handler-led subagent structure uses clear execution roles:
 | Worker | Executes the plan, observes after control actions, and writes `summary.md`/`trace.jsonl`. |
 | Auditor | Reviews trace evidence, detects missing learned skills, and writes `review.md`. |
 
+Motion runs must be closed-loop. A successful `action_sent` response only means
+the command was accepted by the platform; agents must also check periodic or
+post-action `observe` feedback and compare the actual robot state against the
+expected target/trend. If feedback is missing or does not match, the run should
+be diagnosed as retry/blocked instead of reported as physically complete.
+
 The shipped skill surface is intentionally small and real-platform focused:
 
 - `observe`
 - `capture_image`
 - `detect_grasps`
-- `send_action`
+- `move_arm_ee`
 - `move_arm_joints`
 - `set_gripper`
 - `set_base_velocity`

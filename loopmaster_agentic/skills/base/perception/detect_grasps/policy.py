@@ -17,6 +17,7 @@ REQUIRED_MODULES = ("numpy", "PIL", "torch", "open3d", "MinkowskiEngine", "grasp
 
 def dispatch(context, args):
     args = _merge_grounded_sam2_memory(context, dict(args or {}))
+    args = _merge_capture_image_memory(context, args)
     sdk_root = Path(args.get("sdk_root") or _default_sdk_root()).expanduser().resolve()
     detection_dir = sdk_root / "grasp_detection"
     if not detection_dir.is_dir():
@@ -125,6 +126,21 @@ def _merge_grounded_sam2_memory(context: Any, args: dict[str, Any]) -> dict[str,
     if seg_mask_path:
         args["seg_mask_path"] = seg_mask_path
         args.setdefault("region_object_id", latest.get("anygrasp_hint", {}).get("region_object_id") or 1)
+    return args
+
+
+def _merge_capture_image_memory(context: Any, args: dict[str, Any]) -> dict[str, Any]:
+    if args.get("color_path") and args.get("depth_path"):
+        return args
+    latest = getattr(context, "memory", {}).get("capture_image") if hasattr(context, "memory") else None
+    if not isinstance(latest, dict):
+        return args
+    rgb = latest.get("rgb")
+    depth = latest.get("depth")
+    if not args.get("color_path") and isinstance(rgb, dict) and rgb.get("path"):
+        args["color_path"] = rgb["path"]
+    if not args.get("depth_path") and isinstance(depth, dict) and depth.get("path"):
+        args["depth_path"] = depth["path"]
     return args
 
 
@@ -247,14 +263,19 @@ def _load_points(detection_dir: Path, args: dict[str, Any]):
     data_dir = Path(args.get("data_dir") or detection_dir / "example_data").expanduser()
     if not data_dir.is_absolute():
         data_dir = (detection_dir / data_dir).resolve()
-    color_path = Path(args.get("color_path") or data_dir / "color.png").expanduser()
-    depth_path = Path(args.get("depth_path") or data_dir / "depth.png").expanduser()
-    seg_path = Path(args.get("seg_mask_path") or data_dir / "seg_mask.png").expanduser()
+    color_arg = args.get("color_path")
+    depth_arg = args.get("depth_path")
+    seg_arg = args.get("seg_mask_path")
+    color_path = Path(color_arg or data_dir / "color.png").expanduser()
+    depth_path = Path(depth_arg or data_dir / "depth.png").expanduser()
+    seg_path = Path(seg_arg).expanduser() if seg_arg else None
+    if seg_path is None and not color_arg and not depth_arg:
+        seg_path = data_dir / "seg_mask.png"
     region_path = Path(args["region_mask_path"]).expanduser() if args.get("region_mask_path") else None
 
     colors = np.array(Image.open(color_path), dtype=np.float32) / 255.0
     depths = np.array(Image.open(depth_path))
-    seg_raw = np.array(Image.open(seg_path)) if seg_path.is_file() else None
+    seg_raw = np.array(Image.open(seg_path)) if seg_path is not None and seg_path.is_file() else None
     region_raw = _load_binary_mask_image(region_path) if region_path and region_path.is_file() else None
 
     fx = float(args.get("fx", 927.17))
@@ -283,7 +304,7 @@ def _load_points(detection_dir: Path, args: dict[str, Any]):
         "data_dir": str(data_dir),
         "color_path": str(color_path),
         "depth_path": str(depth_path),
-        "seg_mask_path": str(seg_path) if seg_path.is_file() else "",
+        "seg_mask_path": str(seg_path) if seg_path is not None and seg_path.is_file() else "",
         "region_mask_path": str(region_path) if region_path and region_path.is_file() else "",
     }
 

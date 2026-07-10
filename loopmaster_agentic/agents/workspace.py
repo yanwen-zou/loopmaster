@@ -10,7 +10,12 @@ from typing import Any
 
 
 def default_workspace_root() -> Path:
-    return Path(os.environ.get("LOOPMASTER_WORKSPACE_ROOT", "~/.loopmaster/workspaces")).expanduser()
+    return Path(
+        os.environ.get(
+            "LOOPMASTER_WORKSPACE_ROOT",
+            Path(__file__).resolve().parents[2] / "_runs",
+        )
+    ).expanduser()
 
 
 @dataclass(frozen=True)

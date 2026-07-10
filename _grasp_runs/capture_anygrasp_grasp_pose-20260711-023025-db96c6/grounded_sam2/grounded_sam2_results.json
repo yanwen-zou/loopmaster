@@ -1,0 +1,12 @@
+{
+  "image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023025-db96c6/captures/d435_frame_001670_rgb.png",
+  "text_prompt": "bread.",
+  "output_dir": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023025-db96c6/grounded_sam2",
+  "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023025-db96c6/grounded_sam2/seg_mask.png",
+  "annotation_count": 0,
+  "annotations": [],
+  "anygrasp_hint": {
+    "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-023025-db96c6/grounded_sam2/seg_mask.png",
+    "region_object_id": null
+  }
+}

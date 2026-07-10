@@ -1,0 +1,74 @@
+{
+  "workspace": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260710-234953-48bd16",
+  "rgb_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260710-234953-48bd16/captures/d435_frame_031950_rgb.png",
+  "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260710-234953-48bd16/captures/d435_frame_031950_depth.png",
+  "debug_image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260710-234953-48bd16/top_grasp_debug.png",
+  "extrinsics_path": "/home/yanwen/research/agentic/loopmaster/loopmaster_agentic/config/head_camera_extrinsics.json",
+  "camera_to_object": [
+    [
+      -0.02790042944252491,
+      -0.9993356466293335,
+      0.023445138707756996,
+      0.16030794382095337
+    ],
+    [
+      0.7650776505470276,
+      -0.03644322231411934,
+      -0.6429058909416199,
+      -0.09148944914340973
+    ],
+    [
+      0.6433333158493042,
+      0.0,
+      0.7655861377716064,
+      0.359000027179718
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "camera_params": {
+    "source": "/home/yanwen/research/agentic/loopmaster/hei-rebot-lift/software/lerobot-hei-rebot-lift/src/lerobot/cameras/d435_intrinsics_640x480.json",
+    "fx": 607.03662109375,
+    "fy": 606.8038940429688,
+    "cx": 316.76116943359375,
+    "cy": 242.75991821289062,
+    "depth_scale": 999.999952502551,
+    "depth_scale_m": 0.0010000000474974513,
+    "width": 640,
+    "height": 480
+  },
+  "top_grasp": {
+    "index": 0,
+    "score": 0.31124716997146606,
+    "width": 0.07035007327795029,
+    "height": 0.029999999329447746,
+    "depth": 0.029999999329447746,
+    "translation": [
+      0.16030794382095337,
+      -0.09148944914340973,
+      0.359000027179718
+    ],
+    "rotation_matrix": [
+      [
+        -0.02790042944252491,
+        -0.9993356466293335,
+        0.023445138707756996
+      ],
+      [
+        0.7650776505470276,
+        -0.03644322231411934,
+        -0.6429058909416199
+      ],
+      [
+        0.6433333158493042,
+        0.0,
+        0.7655861377716064
+      ]
+    ],
+    "object_id": -1.0
+  }
+}

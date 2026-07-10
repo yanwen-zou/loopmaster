@@ -1,0 +1,205 @@
+{
+  "workspace": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-010554-a1fd86",
+  "rgb_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-010554-a1fd86/captures/d435_frame_052885_rgb.png",
+  "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-010554-a1fd86/captures/d435_frame_052885_depth.png",
+  "debug_image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-010554-a1fd86/top_grasp_debug.png",
+  "extrinsics_path": "/home/yanwen/research/agentic/loopmaster/loopmaster_agentic/config/head_camera_extrinsics.json",
+  "camera_to_object": [
+    [
+      -0.5848186612129211,
+      0.2427220195531845,
+      0.7739982008934021,
+      0.05060204863548279
+    ],
+    [
+      0.7148725390434265,
+      -0.29669928550720215,
+      0.6331878304481506,
+      0.09401575475931168
+    ],
+    [
+      0.38333332538604736,
+      0.9236100912094116,
+      -4.037227796516163e-08,
+      0.2908833622932434
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_grasp_pose": [
+    [
+      0.6981344799106185,
+      0.25160161061378483,
+      -0.6703021246432765,
+      0.1316190215447579
+    ],
+    [
+      0.7148725390434265,
+      -0.29669928550720215,
+      0.6331878304481506,
+      0.3540157547593117
+    ],
+    [
+      -0.039567067295022684,
+      -0.9212308119556051,
+      -0.3869990654832827,
+      0.06278659439807738
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_pose": [
+    [
+      1.0,
+      0.0,
+      0.0,
+      0.1316190215447579
+    ],
+    [
+      0.0,
+      1.0,
+      0.0,
+      0.3540157547593117
+    ],
+    [
+      0.0,
+      0.0,
+      1.0,
+      0.11278659439807738
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_z_offset_m": 0.05,
+  "target_rotation": "fixed",
+  "move_arm_ee_args": {
+    "side": "right",
+    "input_frame": "arm",
+    "pose": {
+      "position": [
+        0.1316190215447579,
+        0.3540157547593117,
+        0.11278659439807738
+      ]
+    },
+    "execute": true,
+    "max_joint_step": 0.05,
+    "step_dt": 0.08,
+    "hold_s": 0.0
+  },
+  "move_arm_ee_result": {
+    "ok": false,
+    "side": "right",
+    "ik_success": false,
+    "positions": {
+      "joint_1": 1.5,
+      "joint_2": -1.997173655658118,
+      "joint_3": -0.45691212956196675,
+      "joint_4": -1.4,
+      "joint_5": 1.0224348703901942,
+      "joint_6": 0.13750486669044296,
+      "gripper": -0.21229113638401031
+    },
+    "target_arm_pose": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.1316190215447579
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.3540157547593117
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.11278659439807738
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "target_camera_pose": null,
+    "transform": null,
+    "error": "IK did not converge",
+    "ik_info": {
+      "backend": "mink",
+      "solver": "daqp",
+      "iterations": 80,
+      "position_error_m": 0.05017748555120585,
+      "task_position_error_m": 0.050659065571499635,
+      "target_world_position": [
+        0.1316190215447579,
+        0.12401575475931167,
+        0.11278659439807738
+      ],
+      "reached_world_position": [
+        0.1816746671732694,
+        0.12052445451100835,
+        0.1129389739588691
+      ]
+    }
+  },
+  "move_arm_ee_error": "move_arm_ee failed: IK did not converge\ntrace: /home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-010554-a1fd86/trace.jsonl",
+  "post_move_arm_positions": null,
+  "camera_params": {
+    "source": "/home/yanwen/research/agentic/loopmaster/hei-rebot-lift/software/lerobot-hei-rebot-lift/src/lerobot/cameras/d435_intrinsics_640x480.json",
+    "fx": 607.03662109375,
+    "fy": 606.8038940429688,
+    "cx": 316.76116943359375,
+    "cy": 242.75991821289062,
+    "depth_scale": 999.999952502551,
+    "depth_scale_m": 0.0010000000474974513,
+    "width": 640,
+    "height": 480
+  },
+  "top_grasp": {
+    "index": 0,
+    "score": 0.2313597947359085,
+    "width": 0.04733610525727272,
+    "height": 0.029999999329447746,
+    "depth": 0.029999999329447746,
+    "translation": [
+      0.05060204863548279,
+      0.09401575475931168,
+      0.2908833622932434
+    ],
+    "rotation_matrix": [
+      [
+        -0.5848186612129211,
+        0.2427220195531845,
+        0.7739982008934021
+      ],
+      [
+        0.7148725390434265,
+        -0.29669928550720215,
+        0.6331878304481506
+      ],
+      [
+        0.38333332538604736,
+        0.9236100912094116,
+        -4.037227796516163e-08
+      ]
+    ],
+    "object_id": -1.0
+  }
+}

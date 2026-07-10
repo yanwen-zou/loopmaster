@@ -14,6 +14,7 @@ args:
   box_threshold: float
   text_threshold: float
   force_cpu: bool
+  local_files_only: bool
 ---
 
 # Grounded SAM2
@@ -30,4 +31,11 @@ and writes:
 
 The returned `seg_mask_path` can be passed to `detect_grasps` with
 `region_object_id=1` to restrict AnyGrasp to the first detected object. The skill
-also stores the latest result in `context.memory["grounded_sam2"]`.
+also stores the latest result in `context.memory["grounded_sam2"]`. If `img_path`
+is omitted and `capture_image` already ran, the skill uses
+`context.memory["capture_image"]["rgb"]["path"]`.
+
+By default the Hugging Face grounding model is loaded with
+`local_files_only=true` to avoid network failures during robot runs. Pass
+`local_files_only=false` only when you intentionally want to download or refresh
+the model cache.

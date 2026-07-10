@@ -24,7 +24,7 @@ class Auditor:
         failed = [step for step in trace if not step.ok]
         used_skills = {step.skill for step in trace}
         control_skills = {
-            "send_action",
+            "move_arm_ee",
             "move_arm_joints",
             "set_gripper",
             "set_base_velocity",
@@ -85,6 +85,31 @@ class Auditor:
         return review
 
 
+_SKILL_FILE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "path": {"type": "string"},
+        "content": {"type": "string"},
+    },
+    "required": ["path", "content"],
+    "additionalProperties": False,
+}
+
+
+_SKILL_PROPOSAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string"},
+        "skill_name": {"type": "string"},
+        "category": {"type": "string"},
+        "rationale": {"type": "string"},
+        "files": {"type": "array", "items": _SKILL_FILE_SCHEMA},
+    },
+    "required": ["kind", "skill_name", "category", "rationale", "files"],
+    "additionalProperties": False,
+}
+
+
 _AUDITOR_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -97,8 +122,8 @@ _AUDITOR_SCHEMA: dict[str, Any] = {
         "research_questions": {"type": "array", "items": {"type": "string"}},
         "success": {"type": "boolean"},
         "notes": {"type": "array", "items": {"type": "string"}},
-        "skill_updates": {"type": "array", "items": {"type": "object"}},
-        "skill_proposals": {"type": "array", "items": {"type": "object"}},
+        "skill_updates": {"type": "array", "items": _SKILL_PROPOSAL_SCHEMA},
+        "skill_proposals": {"type": "array", "items": _SKILL_PROPOSAL_SCHEMA},
     },
     "required": [
         "verdict",
@@ -126,9 +151,18 @@ def _auditor_prompt(*, plan: Plan, trace: list[TraceStep], candidate_review: dic
             "research_needed. Do not ask the user for information that is available in the "
             "repository or in skill implementations; classify repository-local skill/schema/"
             "trace-output defects as retry or blocked with a concrete skill repair next_action. "
+            "For real robot motion, never mark done from action_sent alone. Check whether the "
+            "trace includes periodic or post-action observe feedback showing the actual state "
+            "changed as expected. Feedback is asynchronous: prefer observed range, direction, "
+            "multi-sample trends, and settling-window evidence over a single exact equality check. "
+            "A final sample between the prior command and return target may indicate settling or "
+            "sensor lag, not necessarily failure. If commands were acknowledged but feedback is "
+            "missing, unchanged, too fast to observe, clamped, or consistently inconsistent with "
+            "the target, classify as retry or blocked and diagnose the likely cause. "
             "When a repository-local skill defect can be repaired from the trace and known skill "
             "contract, include a skill_proposals entry. Use kind='update_skill' for existing "
-            "registered skills and kind='new_skill' for a new user skill under LOOPMASTER_SKILL_ROOT. "
+            "registered skills and kind='new_skill' for a new user skill; new skills are applied "
+            "through the registered create_skill skill under LOOPMASTER_SKILL_ROOT. "
             "Each proposal must include complete replacement content for SKILL.md and/or policy.py; "
             "new_skill proposals must include both files. "
             "Reserve research_needed for missing task intent, external runtime state, hardware "

@@ -19,6 +19,7 @@ REQUIRED_MODULES = (
 
 
 def dispatch(context, args):
+    args = _merge_capture_image_memory(context, dict(args or {}))
     repo_root = Path(args.get("repo_root") or _default_repo_root()).expanduser().resolve()
     if not repo_root.is_dir():
         return {"ok": False, "error": f"Grounded-SAM2 repo not found: {repo_root}"}
@@ -42,6 +43,18 @@ def dispatch(context, args):
 
     context.memory["grounded_sam2"] = result
     return {"ok": True, "status": status, **result}
+
+
+def _merge_capture_image_memory(context: Any, args: dict[str, Any]) -> dict[str, Any]:
+    if args.get("img_path"):
+        return args
+    latest = getattr(context, "memory", {}).get("capture_image") if hasattr(context, "memory") else None
+    if not isinstance(latest, dict):
+        return args
+    rgb = latest.get("rgb")
+    if isinstance(rgb, dict) and rgb.get("path"):
+        args["img_path"] = rgb["path"]
+    return args
 
 
 def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
@@ -71,6 +84,7 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
 
     text_prompt = _normalize_prompt(str(args.get("text_prompt") or "car. tire."))
     grounding_model_id = str(args.get("grounding_model") or "IDEA-Research/grounding-dino-tiny")
+    local_files_only = bool(args.get("local_files_only", True))
     checkpoint = Path(args.get("sam2_checkpoint") or repo_root / "checkpoints" / "sam2.1_hiera_large.pt").expanduser()
     if not checkpoint.is_absolute():
         checkpoint = (repo_root / checkpoint).resolve()
@@ -89,8 +103,11 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
         predictor = SAM2ImagePredictor(sam2_model)
         predictor.set_image(image_np)
 
-        processor = AutoProcessor.from_pretrained(grounding_model_id)
-        grounding_model = AutoModelForZeroShotObjectDetection.from_pretrained(grounding_model_id).to(device)
+        processor = AutoProcessor.from_pretrained(grounding_model_id, local_files_only=local_files_only)
+        grounding_model = AutoModelForZeroShotObjectDetection.from_pretrained(
+            grounding_model_id,
+            local_files_only=local_files_only,
+        ).to(device)
         inputs = processor(images=image, text=text_prompt, return_tensors="pt").to(device)
         with torch.no_grad():
             outputs = grounding_model(**inputs)
@@ -121,6 +138,12 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
 
     class_names = [str(label) for label in detections["labels"]]
     confidences = detections["scores"].detach().cpu().numpy().tolist()
+    count = min(len(class_names), len(confidences), int(input_boxes.shape[0]), int(masks.shape[0]))
+    class_names = class_names[:count]
+    confidences = confidences[:count]
+    input_boxes = input_boxes[:count]
+    masks = masks[:count]
+    sam_scores = sam_scores[:count]
     seg_mask = _write_masks(output_dir, masks)
     annotations = _annotations(output_dir, class_names, confidences, input_boxes, sam_scores, masks)
     _write_visualizations(output_dir, img_path, input_boxes, masks, class_names, confidences)
@@ -197,7 +220,16 @@ def _write_visualizations(
     from utils.supervision_utils import CUSTOM_COLOR_MAP
 
     img = cv2.imread(str(img_path))
-    class_ids = np.array(list(range(len(class_names))))
+    count = min(len(class_names), len(confidences), int(boxes.shape[0]), int(masks.shape[0]))
+    if count == 0:
+        cv2.imwrite(str(output_dir / "groundingdino_annotated_image.jpg"), img)
+        cv2.imwrite(str(output_dir / "grounded_sam2_annotated_image_with_mask.jpg"), img)
+        return
+    boxes = boxes[:count]
+    masks = masks[:count]
+    class_names = class_names[:count]
+    confidences = confidences[:count]
+    class_ids = np.arange(count, dtype=int)
     detections = sv.Detections(xyxy=boxes, mask=masks.astype(bool), class_id=class_ids)
     labels = [f"{name} {score:.2f}" for name, score in zip(class_names, confidences)]
     palette = ColorPalette.from_hex(CUSTOM_COLOR_MAP)

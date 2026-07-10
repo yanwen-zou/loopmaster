@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -38,17 +39,54 @@ class Worker:
                 encoding="utf-8",
             )
             if worker_agent.get("proceed") is False:
-                workspace.write_summary(_summary_markdown(plan, [], worker_agent=worker_agent))
-                return []
+                trace: list[TraceStep] = []
+                step = _record_call_result(
+                    "worker_gate",
+                    {},
+                    "worker agent preflight blocked the plan before skill execution",
+                    {
+                        "ok": False,
+                        "error": "worker preflight returned proceed=false",
+                        "execution_notes": worker_agent.get("execution_notes") or [],
+                        "concerns": worker_agent.get("concerns") or [],
+                    },
+                    trace,
+                    workspace,
+                    role="worker.preflight",
+                )
+                if progress is not None:
+                    progress(f"worker preflight blocked execution: {_short_error(step.result)}")
+                    for note in (worker_agent.get("execution_notes") or [])[:3]:
+                        progress(f"worker note: {note}")
+                    for concern in (worker_agent.get("concerns") or [])[:3]:
+                        progress(f"worker concern: {concern}")
+                workspace.write_summary(_summary_markdown(plan, trace, worker_agent=worker_agent))
+                return trace
 
         context = SkillContext(platform=platform, workspace=workspace)
         trace: list[TraceStep] = []
+        _attach_skill_caller(context, skills, trace, workspace)
         for call in plan.steps:
+            try:
+                resolved_args = _resolve_dynamic_args(call.args, context.memory)
+            except Exception as exc:
+                step = _record_call_result(
+                    call.name,
+                    dict(call.args),
+                    call.why,
+                    {"ok": False, "error": f"failed to resolve dynamic args: {type(exc).__name__}: {exc}"},
+                    trace,
+                    workspace,
+                    role=self.role_name,
+                )
+                if progress is not None:
+                    progress(f"skill `{call.name}` failed: {_short_error(step.result)}")
+                break
             if progress is not None:
-                progress(f"skill `{call.name}` args={call.args}")
+                progress(f"skill `{call.name}` args={resolved_args}")
             step = _execute_call(
                 call.name,
-                call.args,
+                resolved_args,
                 call.why,
                 context,
                 skills,
@@ -115,6 +153,43 @@ def _execute_call(
         result = skills.dispatch(name, context, args)
     except Exception as exc:
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    _store_result(context, name, result)
+    return _record_call_result(name, args, why, result, trace, workspace, role=role)
+
+
+def _attach_skill_caller(
+    context: SkillContext,
+    skills: SkillRegistry,
+    trace: list[TraceStep],
+    workspace: Workspace,
+) -> None:
+    def call_skill(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        step = _execute_call(
+            name,
+            args or {},
+            f"called by learned skill through context.call_skill",
+            context,
+            skills,
+            trace,
+            workspace,
+            role="worker.subskill",
+        )
+        return step.result
+
+    setattr(context, "call_skill", call_skill)
+    setattr(context, "call", call_skill)
+
+
+def _record_call_result(
+    name: str,
+    args: dict,
+    why: str,
+    result: dict[str, Any],
+    trace: list[TraceStep],
+    workspace: Workspace,
+    *,
+    role: str,
+) -> TraceStep:
     step = TraceStep(
         index=len(trace) + 1,
         skill=name,
@@ -129,9 +204,65 @@ def _execute_call(
     return step
 
 
+def _store_result(context: SkillContext, name: str, result: dict[str, Any]) -> None:
+    context.memory[name] = result
+    context.memory.setdefault("skills", {})[name] = result
+    context.memory.setdefault("trace", []).append({"skill": name, "result": result})
+    context.memory["last_result"] = result
+
+
+def _resolve_dynamic_args(value: Any, memory: dict[str, Any]) -> Any:
+    if isinstance(value, dict):
+        if set(value) == {"$ref"}:
+            return _lookup_ref(memory, str(value["$ref"]))
+        return {key: _resolve_dynamic_args(item, memory) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_resolve_dynamic_args(item, memory) for item in value]
+    if isinstance(value, str):
+        return _resolve_string_refs(value, memory)
+    return value
+
+
+def _resolve_string_refs(value: str, memory: dict[str, Any]) -> Any:
+    if value.startswith("$") and _REF_PATTERN.fullmatch(value[1:]):
+        return _lookup_ref(memory, value[1:])
+    full = _TEMPLATE_PATTERN.fullmatch(value)
+    if full:
+        return _lookup_ref(memory, full.group(1).strip())
+
+    def replace(match: re.Match[str]) -> str:
+        resolved = _lookup_ref(memory, match.group(1).strip())
+        return str(resolved)
+
+    return _TEMPLATE_PATTERN.sub(replace, value)
+
+
+def _lookup_ref(memory: dict[str, Any], path: str) -> Any:
+    current: Any = memory
+    for part in path.split("."):
+        if not part:
+            continue
+        if isinstance(current, dict):
+            if part not in current:
+                raise KeyError(f"unknown context ref: {path}")
+            current = current[part]
+        elif isinstance(current, list):
+            try:
+                current = current[int(part)]
+            except (ValueError, IndexError) as exc:
+                raise KeyError(f"unknown context ref: {path}") from exc
+        else:
+            raise KeyError(f"unknown context ref: {path}")
+    return current
+
+
+_REF_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z0-9_]+)*")
+_TEMPLATE_PATTERN = re.compile(r"\$\{([^}]+)\}")
+
+
 def _is_control_skill(name: str) -> bool:
     return name in {
-        "send_action",
+        "move_arm_ee",
         "move_arm_joints",
         "set_gripper",
         "set_base_velocity",
@@ -162,8 +293,15 @@ def _worker_prompt(*, plan: Plan, workspace: Workspace) -> str:
         "contract": (
             "You are the LoopMaster Worker subagent. Review the plan before local code executes "
             "registered platform skills. Do not execute tools yourself, do not edit files, and do "
-            "not add unregistered skills. Return proceed=false only for a concrete safety or "
-            "registry issue."
+            "not add unregistered skills. A plan step named create_skill is a registered meta skill "
+            "when it appears in the provided plan; do not reject it merely because it authors a "
+            "learned skill, but do reject malformed create_skill args or unsafe immediate motion. "
+            "For real robot control, action_sent only means the command was accepted. Require "
+            "periodic or post-action observe feedback and compare actual state with expected "
+            "motion; if targets are issued too quickly to move visibly or feedback does not "
+            "change as expected, return proceed=false or let the trace show the mismatch rather "
+            "than treating the run as physically complete. "
+            "Return proceed=false only for a concrete safety or registry issue."
         ),
         "workspace": str(workspace.root),
         "plan": {

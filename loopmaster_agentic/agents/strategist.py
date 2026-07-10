@@ -36,6 +36,7 @@ class Strategist:
             f"Strategist inspected {len(available)} registered skill(s).",
             "Plan uses only discovered skills; no simulation-only predicate is assumed.",
         ]
+        object_conditioned_grasp = _wants_object_conditioned_grasp(lowered)
 
         if "observe" in available:
             steps.append(
@@ -46,21 +47,28 @@ class Strategist:
                 )
             )
 
-        if "capture_image" in available and _wants_visual_evidence(lowered):
+        if "capture_image" in available and (_wants_visual_evidence(lowered) or object_conditioned_grasp):
+            capture_args: dict[str, Any]
+            if object_conditioned_grasp:
+                capture_args = {"source": "d435_rgbd", "camera": "d435", "required": True}
+            else:
+                capture_args = {"camera": _requested_camera(lowered), "required": False}
             steps.append(
                 SkillCall(
                     "capture_image",
-                    {"camera": _requested_camera(lowered), "required": False},
+                    capture_args,
                     "retain visual evidence for planning and audit",
                 )
             )
 
-        object_conditioned_grasp = _wants_object_conditioned_grasp(lowered)
         if "grounded_sam2" in available and object_conditioned_grasp:
             steps.append(
                 SkillCall(
                     "grounded_sam2",
-                    {"text_prompt": _requested_object_prompt(text)},
+                    {
+                        "text_prompt": _requested_object_prompt(text),
+                        "img_path": {"$ref": "capture_image.rgb.path"},
+                    },
                     "segment the requested object before grasp detection",
                 )
             )
@@ -69,6 +77,9 @@ class Strategist:
             grasp_args: dict[str, Any] = {"check_only": _wants_anygrasp_check_only(lowered), "top_k": 5}
             if object_conditioned_grasp:
                 grasp_args["region_object_id"] = 1
+                grasp_args["color_path"] = {"$ref": "capture_image.rgb.path"}
+                grasp_args["depth_path"] = {"$ref": "capture_image.depth.path"}
+                grasp_args["seg_mask_path"] = {"$ref": "grounded_sam2.seg_mask_path"}
             steps.append(
                 SkillCall(
                     "detect_grasps",
@@ -81,8 +92,8 @@ class Strategist:
         control_added |= _maybe_add_base_velocity(lowered, available, steps, research_questions)
         control_added |= _maybe_add_lift_height(lowered, available, steps, research_questions)
         control_added |= _maybe_add_gripper(lowered, available, steps, research_questions, assumptions)
+        control_added |= _maybe_add_arm_ee(text, lowered, available, steps, research_questions)
         control_added |= _maybe_add_arm_joints(lowered, available, steps, research_questions)
-        control_added |= _maybe_add_raw_action(text, lowered, available, steps, research_questions)
 
         if not control_added and _looks_like_manipulation_goal(lowered):
             research_questions.append(
@@ -178,7 +189,7 @@ class Strategist:
 
 FLOAT = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 _CONTROL_SKILLS = {
-    "send_action",
+    "move_arm_ee",
     "move_arm_joints",
     "set_gripper",
     "set_base_velocity",
@@ -228,7 +239,15 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
             "You are the LoopMaster Strategist subagent. Produce a registry-grounded plan for a "
             "real robot or dry-run platform. Use only the provided skill names. Do not invent "
             "simulation-only tools. Keep stop_motion at the end when any control skill appears. "
+            "For any real robot motion, include or rely on closed-loop state feedback: control "
+            "success requires observe evidence that the actual robot state changed as expected, "
+            "not just action_sent acknowledgements. Add dwell/settling time through skill args "
+            "when repeated targets would otherwise be issued too quickly to observe. Feedback is "
+            "asynchronous, so plan for ranges/trends or multiple samples rather than one exact "
+            "post-command equality check. "
             "For each step, encode skill arguments as a compact JSON object string in args_json. "
+            "Later step args may reference prior skill results with {\"$ref\":\"skill.path.to.value\"} "
+            "or string templates like ${skill.path.to.value}; the Worker resolves these from context.memory. "
             "Return only JSON matching the schema."
         ),
         "task": task,
@@ -238,6 +257,7 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
                 "name": skill.name,
                 "category": skill.category,
                 "description": skill.description,
+                "args": skill.frontmatter.get("args", {}),
                 "is_user": skill.is_user,
             }
             for skill in skills
@@ -264,7 +284,13 @@ def _strategist_retry_prompt(
             "Do not ask the user to fix schema mismatches that you can correct. Keep stop_motion at the "
             "end when any control skill appears. If the failure is caused by a repository-local "
             "skill output or documentation defect, identify that skill repair in risks or "
-            "subagent_notes instead of turning it into a user research question. Return only JSON "
+            "subagent_notes instead of turning it into a user research question. For motion retries, "
+            "do not treat action_sent alone as success; require observe feedback that the robot "
+            "state reached or moved toward the target, and add dwell/settling time when commands "
+            "were sent too quickly for physical motion. Feedback can lag commands, so prefer "
+            "multi-sample trends/ranges over single-sample exact equality. Return only JSON "
+            "Later step args may reference prior skill results with {\"$ref\":\"skill.path.to.value\"} "
+            "or string templates like ${skill.path.to.value}. "
             "matching the schema."
         ),
         "task": task,
@@ -282,8 +308,10 @@ def _strategist_retry_prompt(
         "previous_plan": previous_plan,
         "failed_trace": trace,
         "retry_guidance": (
-            "For move_arm_joints use args {\"side\": \"left\"|\"right\", \"positions\": {...}} "
-            "or positions as a 7-value numeric array. Do not use arm=... ."
+            "For move_arm_joints use args {\"side\": \"left\"|\"right\"|\"both\", \"positions\": {...}} "
+            "or positions as a 7-value numeric array. For move_arm_ee use args "
+            "{\"side\":\"left\"|\"right\", \"pose\": {\"position\": [x,y,z], \"rpy\": [r,p,y]}, "
+            "\"input_frame\":\"head_camera\"|\"arm\"}. Do not use arm=... for move_arm_joints."
         ),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
@@ -569,26 +597,38 @@ def _maybe_add_arm_joints(
     return True
 
 
-def _maybe_add_raw_action(
+def _maybe_add_arm_ee(
     original_text: str,
     text: str,
     available: set[str],
     steps: list[SkillCall],
     research_questions: list[str],
 ) -> bool:
-    if "send_action" not in available:
+    if "move_arm_ee" not in available:
         return False
-    if "send_action" not in text and "action=" not in text and "action:" not in text:
+    if not _mentions_any(text, ("move_arm_ee", "end effector", "ee pose", "末端", "位姿")):
         return False
-    action = _extract_mapping(original_text, "action")
-    if not isinstance(action, dict):
-        research_questions.append("Raw action requested but action={...} was not parseable.")
+    side = _extract_side(text)
+    pose = _extract_mapping(original_text, "pose")
+    if pose is None:
+        matrix = _extract_mapping_or_list(original_text, "matrix")
+        if matrix is not None:
+            pose = {"matrix": matrix}
+    if side is None:
+        research_questions.append("End-effector motion requested but side=left/right was not provided.")
+        return False
+    if pose is None:
+        research_questions.append("End-effector motion requested but pose={...} or matrix=[...] was not provided.")
         return False
     steps.append(
         SkillCall(
-            "send_action",
-            {"action": action},
-            "execute explicitly supplied low-level action dictionary",
+            "move_arm_ee",
+            {
+                "side": side,
+                "pose": pose,
+                "input_frame": "head_camera" if "camera" in text or "相机" in text else "arm",
+            },
+            "execute explicitly requested end-effector pose target through IK",
         )
     )
     return True

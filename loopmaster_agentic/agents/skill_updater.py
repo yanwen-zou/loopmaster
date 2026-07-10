@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 import py_compile
+import importlib.util
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from loopmaster_agentic.agents.workspace import Workspace
-from loopmaster_agentic.skills.registry import SkillRegistry, user_skill_root
+from loopmaster_agentic.skills.registry import SkillContext, SkillRegistry, user_skill_root
 
 
 ALLOWED_SKILL_FILES = {"SKILL.md", "policy.py"}
@@ -48,7 +50,7 @@ def apply_review_skill_updates(
     for update in updates:
         if not isinstance(update, dict):
             continue
-        result = _apply_one_proposal(update, skills=skills)
+        result = _apply_one_proposal(update, skills=skills, workspace=workspace)
         results.append(result)
 
     if results:
@@ -73,14 +75,54 @@ def _proposal_list(review: dict[str, Any]) -> list[Any]:
     return out
 
 
-def _apply_one_proposal(update: dict[str, Any], *, skills: SkillRegistry) -> SkillUpdateResult:
+def _apply_one_proposal(
+    update: dict[str, Any],
+    *,
+    skills: SkillRegistry,
+    workspace: Workspace,
+) -> SkillUpdateResult:
     kind = str(update.get("kind") or "update_skill")
     if kind == "new_skill":
+        result = _apply_new_skill_via_create_skill(update, skills=skills, workspace=workspace)
+        if result is not None:
+            return result
         return _apply_new_skill(update)
     if kind == "update_skill":
         return _apply_existing_skill_update(update, skills=skills)
     result = SkillUpdateResult(skill_name=str(update.get("skill_name") or ""))
     result.rejected.append(f"unsupported proposal kind: {kind}")
+    return result
+
+
+def _apply_new_skill_via_create_skill(
+    update: dict[str, Any],
+    *,
+    skills: SkillRegistry,
+    workspace: Workspace,
+) -> SkillUpdateResult | None:
+    if skills.get("create_skill") is None:
+        return None
+    skill_name = str(update.get("skill_name") or "")
+    result = SkillUpdateResult(skill_name=skill_name, rationale=str(update.get("rationale") or ""))
+    try:
+        created = skills.dispatch(
+            "create_skill",
+            SkillContext(platform=None, workspace=workspace),  # type: ignore[arg-type]
+            {
+                "skill_name": skill_name,
+                "category": str(update.get("category") or "learned"),
+                "rationale": result.rationale,
+                "files": update.get("files") or [],
+            },
+        )
+    except Exception as exc:
+        result.rejected.append(f"create_skill dispatch failed: {type(exc).__name__}: {exc}")
+        return result
+
+    result.applied.extend(str(item) for item in created.get("applied") or [])
+    result.rejected.extend(str(item) for item in created.get("rejected") or [])
+    if not created.get("ok") and not result.rejected:
+        result.rejected.append(str(created.get("error") or "create_skill failed"))
     return result
 
 
@@ -161,6 +203,7 @@ def _write_and_validate(staged: list[tuple[Path, str]], *, result: SkillUpdateRe
         for target, _ in staged:
             if target.name == "policy.py":
                 py_compile.compile(str(target), doraise=True)
+                _validate_policy_dispatch(target)
     except Exception as exc:
         for target, backup in backups:
             if backup is None:
@@ -172,6 +215,22 @@ def _write_and_validate(staged: list[tuple[Path, str]], *, result: SkillUpdateRe
 
     result.applied.extend(str(target) for target, _ in staged)
     return result
+
+
+def _validate_policy_dispatch(path: Path) -> None:
+    module_name = f"_loopmaster_skill_update_validate_{abs(hash(path))}"
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"could not import {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+        handler = getattr(module, "dispatch", None)
+        if handler is None or not callable(handler):
+            raise RuntimeError("policy.py must define callable dispatch(context, args)")
+    finally:
+        sys.modules.pop(module_name, None)
 
 
 def _is_relative_to(path: Path, root: Path) -> bool:

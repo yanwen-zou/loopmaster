@@ -1,0 +1,14 @@
+{
+  "topic": "d435_rgbd",
+  "frame_id": 5580,
+  "timestamp_s": 1783709073.906423,
+  "color_encoding": "jpg_bgr8",
+  "depth_encoding": "png_z16",
+  "width": 640,
+  "height": 480,
+  "depth_scale_m": 0.0010000000474974513,
+  "depth_unit": "uint16_raw_times_depth_scale_m",
+  "aligned_depth_to_color": true,
+  "jpeg_quality": 75,
+  "publish_fps": 5.0
+}

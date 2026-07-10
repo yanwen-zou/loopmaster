@@ -1,0 +1,41 @@
+{
+  "image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/captures/d435_frame_007560_rgb.png",
+  "text_prompt": "cola.",
+  "output_dir": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/grounded_sam2",
+  "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/grounded_sam2/seg_mask.png",
+  "annotation_count": 2,
+  "annotations": [
+    {
+      "label_id": 1,
+      "class_name": "cola",
+      "grounding_score": 0.6233768463134766,
+      "sam_score": 0.97265625,
+      "bbox_xyxy": [
+        519.6398315429688,
+        222.0608367919922,
+        632.1149291992188,
+        373.173095703125
+      ],
+      "mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/grounded_sam2/mask_001.png",
+      "area_pixels": 10641
+    },
+    {
+      "label_id": 2,
+      "class_name": "cola",
+      "grounding_score": 0.5760650634765625,
+      "sam_score": 0.92578125,
+      "bbox_xyxy": [
+        519.5113525390625,
+        0.25676965713500977,
+        639.2205200195312,
+        122.4104995727539
+      ],
+      "mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/grounded_sam2/mask_002.png",
+      "area_pixels": 12622
+    }
+  ],
+  "anygrasp_hint": {
+    "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025142-201d48/grounded_sam2/seg_mask.png",
+    "region_object_id": 1
+  }
+}

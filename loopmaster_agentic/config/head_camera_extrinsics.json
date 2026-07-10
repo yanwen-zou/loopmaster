@@ -1,0 +1,121 @@
+{
+  "frame": "head_camera",
+  "transforms": {
+    "left": {
+      "arm_to_camera": [
+        [
+          0.0,
+          -0.8660254037844386,
+          0.5,
+          0.03
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0,
+          -0.2
+        ],
+        [
+          0.0,
+          -0.5,
+          -0.8660254037844386,
+          0.34
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "right": {
+      "arm_to_camera": [
+        [
+          0.0,
+          -0.8660254037844386,
+          0.5,
+          0.03
+        ],
+        [
+          -1.0,
+          0.0,
+          0.0,
+          0.26
+        ],
+        [
+          0.0,
+          -0.5,
+          -0.8660254037844386,
+          0.34
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    }
+  },
+  "objects": {
+    "grasp_pose": {
+      "camera_to_object": [
+        [
+          -0.10877875238656998,
+          0.9904070496559143,
+          0.08521106839179993,
+          0.16834785044193268
+        ],
+        [
+          -0.7796726226806641,
+          -0.13818010687828064,
+          0.6107510328292847,
+          0.07143784314393997
+        ],
+        [
+          0.6166666746139526,
+          0.0,
+          0.787224292755127,
+          0.38100001215934753
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ],
+      "source": "capture_anygrasp_grasp_pose.py",
+      "updated_at_s": 1783709560.5385299,
+      "debug_image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/top_grasp_debug.png",
+      "rgb_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/captures/d435_frame_007774_rgb.png",
+      "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/captures/d435_frame_007774_depth.png",
+      "score": 0.13376866281032562,
+      "width": 0.0953073501586914,
+      "height": 0.029999999329447746,
+      "depth": 0.029999999329447746,
+      "camera_params": {
+        "source": "/home/yanwen/research/agentic/loopmaster/hei-rebot-lift/software/lerobot-hei-rebot-lift/src/lerobot/cameras/d435_intrinsics_640x480.json",
+        "fx": 607.03662109375,
+        "fy": 606.8038940429688,
+        "cx": 316.76116943359375,
+        "cy": 242.75991821289062,
+        "depth_scale": 999.999952502551,
+        "depth_scale_m": 0.0010000000474974513,
+        "width": 640,
+        "height": 480
+      },
+      "anygrasp_source": {
+        "type": "rgbd",
+        "data_dir": "/home/yanwen/research/agentic/loopmaster/third_party/anygrasp_sdk/grasp_detection/example_data",
+        "color_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/captures/d435_frame_007774_rgb.png",
+        "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/captures/d435_frame_007774_depth.png",
+        "seg_mask_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-025228-ab6205/grounded_sam2/seg_mask.png",
+        "region_mask_path": "",
+        "region_point_count": 18448,
+        "region_point_fraction": 0.10507848989542275
+      }
+    }
+  }
+}

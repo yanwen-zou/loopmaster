@@ -1,0 +1,250 @@
+{
+  "workspace": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-004744-33cc22",
+  "rgb_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-004744-33cc22/captures/d435_frame_047877_rgb.png",
+  "depth_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-004744-33cc22/captures/d435_frame_047877_depth.png",
+  "debug_image_path": "/home/yanwen/research/agentic/loopmaster/_grasp_runs/capture_anygrasp_grasp_pose-20260711-004744-33cc22/top_grasp_debug.png",
+  "extrinsics_path": "/home/yanwen/research/agentic/loopmaster/loopmaster_agentic/config/head_camera_extrinsics.json",
+  "camera_to_object": [
+    [
+      0.07559296488761902,
+      -0.2483547329902649,
+      0.9657150506973267,
+      0.02803758718073368
+    ],
+    [
+      0.2812020480632782,
+      -0.923867404460907,
+      -0.259604275226593,
+      0.09964529424905777
+    ],
+    [
+      0.9566666483879089,
+      0.29118531942367554,
+      -1.272811456232148e-08,
+      0.29362988471984863
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_grasp_pose": [
+    [
+      0.4128678962538913,
+      0.3606741676315084,
+      -0.8363337730849192,
+      0.15253367960058803
+    ],
+    [
+      0.2812020480632782,
+      -0.923867404460907,
+      -0.259604275226593,
+      0.3596452942490578
+    ],
+    [
+      -0.8662941029010539,
+      -0.1279965173348569,
+      -0.48285751432579277,
+      0.07169026693194813
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_pose": [
+    [
+      0.4128678962538913,
+      0.3606741676315084,
+      -0.8363337730849192,
+      0.15253367960058803
+    ],
+    [
+      0.2812020480632782,
+      -0.923867404460907,
+      -0.259604275226593,
+      0.3596452942490578
+    ],
+    [
+      -0.8662941029010539,
+      -0.1279965173348569,
+      -0.48285751432579277,
+      0.12169026693194814
+    ],
+    [
+      0.0,
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "right_arm_target_z_offset_m": 0.05,
+  "move_arm_ee_args": {
+    "side": "right",
+    "input_frame": "arm",
+    "pose": {
+      "matrix": [
+        [
+          0.4128678962538913,
+          0.3606741676315084,
+          -0.8363337730849192,
+          0.15253367960058803
+        ],
+        [
+          0.2812020480632782,
+          -0.923867404460907,
+          -0.259604275226593,
+          0.3596452942490578
+        ],
+        [
+          -0.8662941029010539,
+          -0.1279965173348569,
+          -0.48285751432579277,
+          0.12169026693194814
+        ],
+        [
+          0.0,
+          0.0,
+          0.0,
+          1.0
+        ]
+      ]
+    },
+    "execute": true
+  },
+  "move_arm_ee_result": {
+    "ok": true,
+    "side": "right",
+    "executed": true,
+    "ik_success": true,
+    "positions": {
+      "joint_1": 1.0610112020051767,
+      "joint_2": -1.5741585273456733,
+      "joint_3": -1.1350648783372392,
+      "joint_4": 0.6215130408924574,
+      "joint_5": -0.12978906233790694,
+      "joint_6": 3.14,
+      "gripper": -0.15506981313228607
+    },
+    "action_sent": {
+      "right_joint_1.pos": 1.0610111951828003,
+      "right_joint_2.pos": -1.5741585493087769,
+      "right_joint_3.pos": -1.1350648403167725,
+      "right_joint_4.pos": 0.6215130686759949,
+      "right_joint_5.pos": -0.1297890692949295,
+      "right_joint_6.pos": 3.140000104904175,
+      "right_gripper.pos": -0.15506981313228607,
+      "left_joint_1.pos": 0.0,
+      "left_joint_2.pos": 0.0,
+      "left_joint_3.pos": 0.0,
+      "left_joint_4.pos": 0.0,
+      "left_joint_5.pos": 0.0,
+      "left_joint_6.pos": 0.0,
+      "left_gripper.pos": 0.0,
+      "x.vel": 0.0,
+      "y.vel": 0.0,
+      "theta.vel": 0.0,
+      "height.pos": 0.0
+    },
+    "target_arm_pose": [
+      [
+        0.4128678962538913,
+        0.3606741676315084,
+        -0.8363337730849192,
+        0.15253367960058803
+      ],
+      [
+        0.2812020480632782,
+        -0.923867404460907,
+        -0.259604275226593,
+        0.3596452942490578
+      ],
+      [
+        -0.8662941029010539,
+        -0.1279965173348569,
+        -0.48285751432579277,
+        0.12169026693194814
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "target_camera_pose": null,
+    "transform": null,
+    "ik_info": {
+      "backend": "mink",
+      "solver": "daqp",
+      "iterations": 80,
+      "position_error_m": 0.018554748252951066,
+      "task_position_error_m": 0.019001035431406566,
+      "target_world_position": [
+        0.15253367960058803,
+        0.12964529424905777,
+        0.12169026693194814
+      ],
+      "reached_world_position": [
+        0.16872430273821226,
+        0.12058204957118855,
+        0.1216892398522236
+      ]
+    }
+  },
+  "move_arm_ee_error": null,
+  "post_move_arm_positions": {
+    "right_joint_1.pos": 0.961509108543396,
+    "right_joint_2.pos": -1.4280537366867065,
+    "right_joint_3.pos": -1.0751888751983643,
+    "right_joint_4.pos": 0.6177996397018433,
+    "right_joint_5.pos": -0.12798504531383514,
+    "right_joint_6.pos": 2.3149843215942383,
+    "right_gripper.pos": -0.15506981313228607
+  },
+  "camera_params": {
+    "source": "/home/yanwen/research/agentic/loopmaster/hei-rebot-lift/software/lerobot-hei-rebot-lift/src/lerobot/cameras/d435_intrinsics_640x480.json",
+    "fx": 607.03662109375,
+    "fy": 606.8038940429688,
+    "cx": 316.76116943359375,
+    "cy": 242.75991821289062,
+    "depth_scale": 999.999952502551,
+    "depth_scale_m": 0.0010000000474974513,
+    "width": 640,
+    "height": 480
+  },
+  "top_grasp": {
+    "index": 0,
+    "score": 0.32812944054603577,
+    "width": 0.05328631028532982,
+    "height": 0.029999999329447746,
+    "depth": 0.019999999552965164,
+    "translation": [
+      0.02803758718073368,
+      0.09964529424905777,
+      0.29362988471984863
+    ],
+    "rotation_matrix": [
+      [
+        0.07559296488761902,
+        -0.2483547329902649,
+        0.9657150506973267
+      ],
+      [
+        0.2812020480632782,
+        -0.923867404460907,
+        -0.259604275226593
+      ],
+      [
+        0.9566666483879089,
+        0.29118531942367554,
+        -1.272811456232148e-08
+      ]
+    ],
+    "object_id": -1.0
+  }
+}

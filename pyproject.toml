@@ -7,7 +7,9 @@ name = "loopmaster-agentic"
 version = "0.1.0"
 description = "Agentic robotics framework for HEI ReBot Lift real-robot loops."
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "rerun-sdk>=0.26.0,<0.27.0",
+]
 
 [project.optional-dependencies]
 hei-rebot-lift = [
@@ -25,6 +27,7 @@ vr = [
     "casadi>=3.7.0,<4.0.0",
     "cmeel-tinyxml2>=10.0.0,<11.0.0",
     "cmeel-urdfdom>=4.0.1,<5.0.0",
+    "mink>=0.0.11,<0.1.0",
     "mujoco==3.5.0",
     "pin>=3.9.0,<4.0.0",
     "pynput>=1.7.8,<1.9.0",

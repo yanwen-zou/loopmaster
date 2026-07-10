@@ -166,9 +166,22 @@ def format_handler_reply(result: RunResult) -> str:
             lines.append(f"本轮调用了：{', '.join(used_skills)}。")
         else:
             lines.append("本轮没有调用机器人 skill。")
+        used_control = review.get("used_control_skills") or []
+        if used_control:
+            stop_text = "，并已发送 stop_motion" if "stop_motion" in used_skills else ""
+            lines.append(f"控制技能已执行{stop_text}。")
+            control_summary = _control_execution_summary(result)
+            if control_summary:
+                lines.append(control_summary)
+        if any("failure trace returned to strategist" in str(note) for note in result.notes):
+            lines.append("过程中有一次可修复的 skill 调用失败，已自动重规划并继续执行。")
     else:
         root_cause = str(review.get("root_cause") or "任务没有完成")
         lines = [f"这轮没有完成：{root_cause}。"]
+        failed_steps = [step for step in result.trace if not step.ok]
+        if failed_steps:
+            lines.append("失败点：")
+            lines.extend(f"- {_trace_step_detail(step)}" for step in failed_steps[:3])
         research_questions = review.get("research_questions") or []
         if research_questions:
             lines.append("还需要你补充：")
@@ -176,13 +189,6 @@ def format_handler_reply(result: RunResult) -> str:
         next_action = str(review.get("next_action") or "")
         if next_action:
             lines.append(f"下一步：{next_action}")
-    if result.trace:
-        lines.append("")
-        lines.append("本轮执行 trace：")
-        for step in result.trace:
-            status = "ok" if step.ok else "failed"
-            detail = _trace_step_detail(step)
-            lines.append(f"- {detail} -> {status}")
     lines.append("")
     lines.append(f"工作区：`{result.workspace}`")
     if verdict != "done":
@@ -223,6 +229,63 @@ def _result_summary(result: dict[str, Any], *, ok: bool) -> str:
     if "image" in result:
         return f"image={_compact_json(result['image'])}"
     return ""
+
+
+def _control_execution_summary(result: RunResult) -> str:
+    move_steps = [step for step in result.trace if step.skill == "move_arm_joints" and step.ok]
+    if move_steps:
+        return _move_arm_joints_summary(move_steps)
+    oscillate = next((step for step in result.trace if step.skill == "oscillate_arm_joint" and step.ok), None)
+    if oscillate is not None:
+        data = oscillate.result
+        side = data.get("side")
+        joint = data.get("joint")
+        cycles = data.get("cycles")
+        targets = data.get("targets") or {}
+        positive = _target_joint_value(targets.get("positive"), joint)
+        negative = _target_joint_value(targets.get("negative"), joint)
+        if side and joint and cycles and positive is not None and negative is not None:
+            return (
+                f"运动日志：`oscillate_arm_joint` 已请求 {side} joint_{joint} "
+                f"{cycles} 轮，目标 {positive:+.3f}/{negative:+.3f} rad。"
+            )
+    return ""
+
+
+def _move_arm_joints_summary(steps: list[Any]) -> str:
+    first = steps[0]
+    side = str(first.args.get("side") or "")
+    joint_ranges: dict[str, list[float]] = {}
+    for step in steps:
+        current_side = str(step.args.get("side") or side)
+        positions = step.args.get("positions")
+        if not isinstance(positions, list):
+            continue
+        for idx, value in enumerate(positions[:6], start=1):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError):
+                continue
+            key = f"{current_side} joint_{idx}"
+            joint_ranges.setdefault(key, []).append(numeric)
+    moving = []
+    for key, values in joint_ranges.items():
+        if len(values) >= 2 and max(values) - min(values) > 1e-3:
+            moving.append((key, min(values), max(values)))
+    if not moving:
+        return f"运动日志：发出了 {len(steps)} 次 `move_arm_joints`，但 trace 中未看到明显变化的关节目标。"
+    details = "; ".join(f"{key} {lo:+.3f}..{hi:+.3f} rad" for key, lo, hi in moving[:3])
+    return f"运动日志：发出了 {len(steps)} 次 `move_arm_joints`；{details}。"
+
+
+def _target_joint_value(target: Any, joint: Any) -> float | None:
+    if not isinstance(target, list):
+        return None
+    try:
+        index = int(joint) - 1
+        return float(target[index])
+    except (TypeError, ValueError, IndexError):
+        return None
 
 
 def _compact_json(value: Any, *, limit: int = 360) -> str:

@@ -40,6 +40,24 @@ skill it automatically calls `observe` when available, so the trace contains
 closed-loop evidence. If any skill fails, Worker attempts `stop_motion` before
 returning control.
 
+Closed-loop state feedback is mandatory for every real robot motion. Agents must
+not treat `action_sent` or a successful skill return as proof that the robot
+physically moved. For any control operation, the plan and trace need periodic or
+post-action `observe` evidence, and the Worker/Auditor should compare actual
+state against the requested target or expected trend. If feedback does not match
+the expected motion, the run should be classified as `retry` or `blocked` with a
+diagnosis, such as commands being issued too quickly, the lower-level client
+acknowledging without actuating, joint limits/clamping, stale observations, or a
+missing dwell/settling interval. This avoids false success reports like a joint
+oscillation whose positive/negative targets were sent in milliseconds and then
+immediately returned to the start pose before the hardware visibly moved.
+State feedback is not perfectly synchronous with command dispatch. Auditors
+should prefer a short time series, observed range, direction of change, and
+settling-window evidence over a single exact equality check. A final sample that
+is between the last commanded target and the return target can mean the robot is
+still settling or the observation stream is delayed; it should trigger diagnosis
+or longer polling, not an automatic claim that the motion did not happen.
+
 The Auditor classifies outcomes as `done`, `retry`, `blocked`, or
 `research_needed`. `research_needed` is the real-robot analogue of the
 RoboHermes self-evolution path: use the trace evidence to author or approve a
@@ -68,9 +86,20 @@ machines without robot hardware dependencies.
 Shipped skills are limited to platform basics:
 
 - perception: `observe`, `capture_image`
-- control: `send_action`, `move_arm_joints`, `set_gripper`,
-  `set_base_velocity`, `set_lift_height`, `stop_motion`
+- control: `move_arm_ee`, `move_arm_joints`, `set_gripper`, `set_base_velocity`,
+  `set_lift_height`, `stop_motion`
 
 There are no shipped task recipes or simulation-specific bindings.
 Task-specific skills should be learned later and placed under the user skill
 root configured by `LOOPMASTER_SKILL_ROOT`.
+
+## Worker Context
+
+After each skill call, Worker stores the result in `context.memory` under the
+skill name, `skills.<skill_name>`, and `last_result`. Later planned args can
+reference those values with `{"$ref": "skill.path.to.value"}` or interpolate
+them in strings with `${skill.path.to.value}`.
+
+For example, a perception chain can pass `capture_image.rgb.path` to
+`grounded_sam2.img_path`, then pass `grounded_sam2.seg_mask_path` and
+`capture_image.depth.path` to `detect_grasps`.

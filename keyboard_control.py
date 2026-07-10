@@ -4,6 +4,7 @@ import argparse
 import select
 import sys
 import termios
+import time
 import tty
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,12 +27,16 @@ Chassis:
   w/s: x +/-        a/d: y +/-        q/e: theta +/-
   space: stop       x or Ctrl-C: quit
 
+EE mode (--ee):
+  w/s: ee x +/-     a/d: ee y +/-     q/e: ee z +/-
+  l/r: select left/right arm
+
 Arm joints:
   l/r: select left/right arm
   1-7: select joint_1..joint_6/gripper
   +/-: increment/decrement selected joint
   [ ]: larger decrement/increment
-  o: refresh selected arm positions from observation
+  o: refresh arm joint angles immediately
 """
 
 ARM_SIDE_KEYS = {
@@ -45,11 +50,16 @@ class TeleopState:
     side: str = "right"
     joint_index: int = 0
     arm_positions: dict[str, dict[str, float]] | None = None
+    ee_targets: dict[str, dict[str, list[float]]] | None = None
 
     def __post_init__(self) -> None:
         if self.arm_positions is None:
             self.arm_positions = {
                 side: {joint: 0.0 for joint in ARM_JOINTS} for side in ARM_SIDES
+            }
+        if self.ee_targets is None:
+            self.ee_targets = {
+                side: {"position": [0.2, 0.0, 0.3], "rpy": [0.0, 0.0, 0.0]} for side in ARM_SIDES
             }
 
     @property
@@ -59,6 +69,10 @@ class TeleopState:
     def selected_positions(self) -> dict[str, float]:
         assert self.arm_positions is not None
         return self.arm_positions[self.side]
+
+    def selected_ee_target(self) -> dict[str, list[float]]:
+        assert self.ee_targets is not None
+        return self.ee_targets[self.side]
 
 
 class _WorkspaceStub:
@@ -101,7 +115,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--angular-speed", type=float, default=0.15, help="Chassis theta velocity command.")
     parser.add_argument("--joint-step", type=float, default=0.02, help="Small arm joint increment.")
     parser.add_argument("--large-joint-step", type=float, default=0.10, help="Large arm joint increment.")
+    parser.add_argument("--ee", action="store_true", help="Use w/a/s/d/q/e to test move_arm_ee instead of chassis.")
+    parser.add_argument("--ee-step", type=float, default=0.01, help="End-effector Cartesian increment in meters.")
+    parser.add_argument("--ee-frame", choices=("arm", "head_camera"), default="arm", help="Input frame for EE targets.")
+    parser.add_argument("--ee-x", type=float, default=0.2, help="Initial EE target x.")
+    parser.add_argument("--ee-y", type=float, default=0.0, help="Initial EE target y.")
+    parser.add_argument("--ee-z", type=float, default=0.3, help="Initial EE target z.")
+    parser.add_argument("--ee-roll", type=float, default=0.0, help="Initial EE target roll in radians.")
+    parser.add_argument("--ee-pitch", type=float, default=0.0, help="Initial EE target pitch in radians.")
+    parser.add_argument("--ee-yaw", type=float, default=0.0, help="Initial EE target yaw in radians.")
     parser.add_argument("--poll", type=float, default=0.05, help="Keyboard poll interval in seconds.")
+    parser.add_argument("--joint-refresh-hz", type=float, default=2.0, help="Refresh and display all arm joint angles at this rate. Set <=0 to disable.")
     args = parser.parse_args(argv)
 
     if not args.dry_run and not args.yes:
@@ -111,6 +135,7 @@ def main(argv: list[str] | None = None) -> int:
     registry = SkillRegistry(include_user=False)
     context = SkillContext(platform=platform, workspace=_WorkspaceStub())
     state = TeleopState()
+    _initialize_ee_targets(state, args)
 
     print(KEY_HELP)
     print("Connecting platform...")
@@ -118,9 +143,15 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _refresh_arm_positions(context, state, quiet=True)
-        _print_status(state)
+        _print_live_joint_status(state)
+        refresh_interval = 1.0 / args.joint_refresh_hz if args.joint_refresh_hz > 0 else None
+        next_refresh = time.monotonic() + (refresh_interval or 0.0)
         with RawTerminal() as terminal:
             while True:
+                if refresh_interval is not None and time.monotonic() >= next_refresh:
+                    _refresh_arm_positions(context, state, quiet=True)
+                    _print_live_joint_status(state)
+                    next_refresh = time.monotonic() + refresh_interval
                 key = terminal.read_key(max(args.poll, 0.001))
                 if key is None:
                     continue
@@ -154,6 +185,20 @@ def _handle_key(
     context: SkillContext,
     state: TeleopState,
 ) -> None:
+    lowered = key.lower()
+    if getattr(args, "ee", False) and lowered in {"w", "s", "a", "d", "q", "e"}:
+        ee_motion = {
+            "w": (0, 1.0),
+            "s": (0, -1.0),
+            "a": (1, 1.0),
+            "d": (1, -1.0),
+            "q": (2, 1.0),
+            "e": (2, -1.0),
+        }
+        axis, direction = ee_motion[lowered]
+        _move_selected_ee(registry, context, args, state, axis, direction * getattr(args, "ee_step", 0.01))
+        return
+
     chassis = {
         "w": (args.linear_speed, 0.0, 0.0),
         "s": (-args.linear_speed, 0.0, 0.0),
@@ -162,7 +207,6 @@ def _handle_key(
         "q": (0.0, 0.0, args.angular_speed),
         "e": (0.0, 0.0, -args.angular_speed),
     }
-    lowered = key.lower()
     if lowered in chassis:
         x, y, theta = chassis[lowered]
         _dispatch(registry, context, "set_base_velocity", {"x": x, "y": y, "theta": theta})
@@ -188,6 +232,58 @@ def _handle_key(
     if lowered == "o":
         _refresh_arm_positions(context, state, quiet=False)
         _print_status(state)
+
+
+def _initialize_ee_targets(state: TeleopState, args: argparse.Namespace) -> None:
+    target = {
+        "position": [
+            float(getattr(args, "ee_x", 0.2)),
+            float(getattr(args, "ee_y", 0.0)),
+            float(getattr(args, "ee_z", 0.3)),
+        ],
+        "rpy": [
+            float(getattr(args, "ee_roll", 0.0)),
+            float(getattr(args, "ee_pitch", 0.0)),
+            float(getattr(args, "ee_yaw", 0.0)),
+        ],
+    }
+    state.ee_targets = {
+        side: {"position": list(target["position"]), "rpy": list(target["rpy"])}
+        for side in ARM_SIDES
+    }
+
+
+def _move_selected_ee(
+    registry: SkillRegistry,
+    context: SkillContext,
+    args: argparse.Namespace,
+    state: TeleopState,
+    axis: int,
+    delta: float,
+) -> None:
+    target = state.selected_ee_target()
+    target["position"][axis] += delta
+    result = _dispatch(
+        registry,
+        context,
+        "move_arm_ee",
+        {
+            "side": state.side,
+            "input_frame": getattr(args, "ee_frame", "arm"),
+            "pose": {"position": list(target["position"]), "rpy": list(target["rpy"])},
+            "execute": True,
+        },
+    )
+    if not result.get("ok"):
+        target["position"][axis] -= delta
+        print(f"\nmove_arm_ee failed: {result.get('error')}")
+        return
+    x, y, z = target["position"]
+    print(
+        f"\r{state.side} ee x={x:+.3f} y={y:+.3f} z={z:+.3f}                  ",
+        end="",
+        flush=True,
+    )
 
 
 def _move_selected_joint(
@@ -216,6 +312,24 @@ def _move_selected_joint(
 
 
 def _refresh_arm_positions(context: SkillContext, state: TeleopState, *, quiet: bool) -> None:
+    if hasattr(context.platform, "read_arm_positions"):
+        try:
+            raw = context.platform.read_arm_positions()
+        except Exception as exc:
+            if not quiet:
+                print(f"\nread_arm_positions failed: {type(exc).__name__}: {exc}")
+            return
+        assert state.arm_positions is not None
+        for side in ARM_SIDES:
+            prefix = f"{side}_"
+            for joint in ARM_JOINTS:
+                candidates = (f"{prefix}{joint}.pos", f"{prefix}{joint}", joint, f"{joint}.pos")
+                for key in candidates:
+                    if key in raw:
+                        state.arm_positions[side][joint] = float(raw[key])
+                        break
+        return
+
     try:
         obs = context.platform.observe()
     except Exception as exc:
@@ -250,6 +364,29 @@ def _print_status(state: TeleopState) -> None:
         end="",
         flush=True,
     )
+
+
+def _print_live_joint_status(state: TeleopState) -> None:
+    assert state.arm_positions is not None
+    parts = []
+    for side in ("right", "left"):
+        joints = " ".join(
+            f"{_joint_label(joint)}={state.arm_positions[side][joint]:+6.3f}"
+            for joint in ARM_JOINTS
+        )
+        marker = "*" if side == state.side else " "
+        parts.append(f"{marker}{side}: {joints}")
+    selected = f"selected={state.side}.{state.joint}"
+    line = " | ".join(parts + [selected])
+    print(f"\r\033[2K{line}", end="", flush=True)
+
+
+def _joint_label(joint: str) -> str:
+    if joint.startswith("joint_"):
+        return "j" + joint.split("_", 1)[1]
+    if joint == "gripper":
+        return "g"
+    return joint
 
 
 if __name__ == "__main__":

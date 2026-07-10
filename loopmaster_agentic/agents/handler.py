@@ -143,12 +143,29 @@ class Handler:
                         progress(f"strategist revised plan: {_format_plan_steps(plan)}")
                 if progress is not None:
                     progress("auditor reviewing trace")
-                review = self.auditor.review(
-                    plan=plan,
-                    trace=trace,
-                    workspace=workspace,
-                    agent_client=self.agent_client,
-                )
+                try:
+                    review = self.auditor.review(
+                        plan=plan,
+                        trace=trace,
+                        workspace=workspace,
+                        agent_client=self.agent_client,
+                    )
+                except Exception as exc:
+                    review = _auditor_failure_review(plan=plan, trace=trace, error=exc)
+                    (workspace.root / "auditor_agent_error.txt").write_text(str(exc) + "\n", encoding="utf-8")
+                    workspace.write_review(_auditor_failure_markdown(plan, review))
+                    notes.append(f"auditor subagent failed: {type(exc).__name__}: {exc}")
+                    if progress is not None:
+                        progress(f"auditor failed: {type(exc).__name__}: {_short_error(exc)}")
+                    return RunResult(
+                        task=task,
+                        workspace=str(workspace.root),
+                        plan=plan,
+                        trace=trace,
+                        review=review,
+                        success=False,
+                        notes=notes,
+                    )
                 notes.extend(_agent_notes("auditor", review))
                 if progress is not None:
                     progress(f"auditor verdict={review.get('verdict')} root_cause={review.get('root_cause') or 'none'}")
@@ -254,6 +271,10 @@ def _repairable_failure_signature(
         return None
     error_text = str(failed.result.get("error") or failed.result).lower()
     retry_markers = (
+        "worker preflight returned proceed=false",
+        "proceed=false",
+        "preflight",
+        "stale",
         "schema",
         "argument",
         "args",
@@ -292,6 +313,47 @@ def _skill_update_signature(review: dict[str, Any]) -> str:
     if not proposals:
         return ""
     return json.dumps(proposals, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _auditor_failure_review(*, plan: Plan, trace: list[Any], error: Exception) -> dict[str, Any]:
+    used_skills = sorted({str(step.skill) for step in trace})
+    control_skills = {
+        "move_arm_ee",
+        "move_arm_joints",
+        "set_gripper",
+        "set_base_velocity",
+        "set_lift_height",
+    }
+    return {
+        "verdict": "blocked",
+        "root_cause": f"auditor subagent failed: {type(error).__name__}: {_short_error(error)}",
+        "next_action": "Fix the auditor Codex/profile/model configuration and rerun audit; no local audit fallback was used.",
+        "used_skills": used_skills,
+        "used_control_skills": sorted(set(used_skills) & control_skills),
+        "sim_leak": [],
+        "research_questions": [],
+        "success": False,
+        "notes": ["worker trace exists but final auditor verification did not complete"],
+    }
+
+
+def _auditor_failure_markdown(plan: Plan, review: dict[str, Any]) -> str:
+    return "\n".join(
+        [
+            f"# Audit: {plan.task}",
+            "",
+            "**Verdict**: `blocked`",
+            f"**Root cause**: {review['root_cause']}",
+            f"**Next action**: {review['next_action']}",
+            "",
+            "Auditor subagent failed, so this run was not marked done.",
+        ]
+    ).rstrip() + "\n"
+
+
+def _short_error(error: Exception, *, limit: int = 240) -> str:
+    text = str(error).replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _roots_with_user_skill_root(skills: SkillRegistry) -> list[Path]:
