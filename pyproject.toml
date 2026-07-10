@@ -34,6 +34,15 @@ vr = [
 dev = [
     "pytest>=8.1.0,<9.0.0",
 ]
+tui = [
+    "prompt-toolkit>=3.0.0,<4.0.0",
+    "rich>=13.7.0,<15.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.1.0,<9.0.0",
+]
 
 [project.scripts]
 loopmaster-agentic = "loopmaster_agentic.cli:main"

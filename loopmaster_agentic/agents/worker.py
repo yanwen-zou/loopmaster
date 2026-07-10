@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+from typing import Any
+
+from loopmaster_agentic.agents.codex_subagent import SubagentClient
 from loopmaster_agentic.agents.workspace import Workspace
-from loopmaster_agentic.core.types import Plan, TraceStep
+from loopmaster_agentic.core.types import Plan, SkillCall, TraceStep
 from loopmaster_agentic.platform.base import RobotPlatform
 from loopmaster_agentic.skills.registry import SkillContext, SkillRegistry
 
@@ -18,7 +22,23 @@ class Worker:
         workspace: Workspace,
         platform: RobotPlatform,
         skills: SkillRegistry,
+        agent_client: SubagentClient | None = None,
     ) -> list[TraceStep]:
+        worker_agent: dict[str, Any] | None = None
+        if agent_client is not None:
+            worker_agent = agent_client.run_json(
+                role=self.role_name,
+                prompt=_worker_prompt(plan=plan, workspace=workspace),
+                schema=_WORKER_SCHEMA,
+            )
+            (workspace.root / "worker_agent.json").write_text(
+                json.dumps(worker_agent, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            if worker_agent.get("proceed") is False:
+                workspace.write_summary(_summary_markdown(plan, [], worker_agent=worker_agent))
+                return []
+
         context = SkillContext(platform=platform, workspace=workspace)
         trace: list[TraceStep] = []
         for call in plan.steps:
@@ -58,7 +78,7 @@ class Worker:
                 )
                 if not post.ok:
                     break
-        workspace.write_summary(_summary_markdown(plan, trace))
+        workspace.write_summary(_summary_markdown(plan, trace, worker_agent=worker_agent))
         return trace
 
 
@@ -101,11 +121,65 @@ def _is_control_skill(name: str) -> bool:
     }
 
 
-def _summary_markdown(plan: Plan, trace: list[TraceStep]) -> str:
+_WORKER_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "proceed": {"type": "boolean"},
+        "execution_notes": {"type": "array", "items": {"type": "string"}},
+        "concerns": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["proceed", "execution_notes", "concerns"],
+    "additionalProperties": False,
+}
+
+
+def _worker_prompt(*, plan: Plan, workspace: Workspace) -> str:
+    payload = {
+        "role": "worker",
+        "contract": (
+            "You are the LoopMaster Worker subagent. Review the plan before local code executes "
+            "registered platform skills. Do not execute tools yourself, do not edit files, and do "
+            "not add unregistered skills. Return proceed=false only for a concrete safety or "
+            "registry issue."
+        ),
+        "workspace": str(workspace.root),
+        "plan": {
+            "task": plan.task,
+            "goal": plan.goal,
+            "steps": [_call_to_dict(step) for step in plan.steps],
+            "research_questions": list(plan.research_questions),
+            "risks": list(plan.risks),
+        },
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _call_to_dict(step: SkillCall) -> dict[str, Any]:
+    return {"name": step.name, "args": step.args, "why": step.why}
+
+
+def _summary_markdown(
+    plan: Plan,
+    trace: list[TraceStep],
+    *,
+    worker_agent: dict[str, Any] | None = None,
+) -> str:
     lines = [
         f"# Worker Summary: {plan.task}",
         "",
         f"Executed {len(trace)} skill call(s).",
+    ]
+    if worker_agent is not None:
+        lines += [
+            "",
+            "## Codex Worker",
+            f"- Proceed: {worker_agent.get('proceed')}",
+        ]
+        for note in worker_agent.get("execution_notes") or []:
+            lines.append(f"- Note: {note}")
+        for concern in worker_agent.get("concerns") or []:
+            lines.append(f"- Concern: {concern}")
+    lines += [
         "",
         "## Trace",
     ]

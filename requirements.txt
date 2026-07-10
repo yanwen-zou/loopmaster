@@ -1,5 +1,6 @@
-# Install the LoopMaster agent plus the HEI ReBot Lift and VR runtime dependencies:
-#   uv venv --python 3.12
-#   uv pip install -r requirements.txt
+# Compatibility entry point for pip-style installs. Prefer the locked uv flow:
+#   uv sync
+#   uv sync --all-extras --all-groups   # full robot/VR stack
+#   uv run python -m unittest discover -s tests
 
 -e .[hei-rebot-lift,vr,dev]

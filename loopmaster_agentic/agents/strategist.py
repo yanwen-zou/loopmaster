@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
 from typing import Any
 
+from loopmaster_agentic.agents.codex_subagent import SubagentClient
 from loopmaster_agentic.agents.workspace import Workspace
 from loopmaster_agentic.core.types import Plan, SkillCall
 from loopmaster_agentic.skills.registry import SkillRegistry
@@ -21,8 +23,10 @@ class Strategist:
         user_request: str,
         workspace: Workspace,
         skills: SkillRegistry,
+        agent_client: SubagentClient | None = None,
     ) -> Plan:
-        available = {skill.name for skill in skills.list()}
+        discovered_skills = skills.list()
+        available = {skill.name for skill in discovered_skills}
         text = user_request.strip() or task
         lowered = text.lower()
         steps: list[SkillCall] = []
@@ -48,6 +52,15 @@ class Strategist:
                     "capture_image",
                     {"camera": _requested_camera(lowered), "required": False},
                     "retain visual evidence for planning and audit",
+                )
+            )
+
+        if "detect_grasps" in available and _wants_grasp_detection(lowered):
+            steps.append(
+                SkillCall(
+                    "detect_grasps",
+                    {"check_only": _wants_anygrasp_check_only(lowered), "top_k": 5},
+                    "run AnyGrasp grasp perception or readiness check",
                 )
             )
 
@@ -95,11 +108,169 @@ class Strategist:
             research_questions=research_questions,
             subagent_notes=subagent_notes,
         )
+        if agent_client is not None:
+            agent_plan = agent_client.run_json(
+                role=self.role_name,
+                prompt=_strategist_prompt(
+                    task=task,
+                    user_request=user_request,
+                    skills=discovered_skills,
+                    candidate_plan=_plan_to_dict(plan),
+                ),
+                schema=_PLAN_SCHEMA,
+            )
+            (workspace.root / "strategist_agent.json").write_text(
+                json.dumps(agent_plan, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            plan = _plan_from_agent(agent_plan, fallback=plan, available=available)
         workspace.write_plan(plan.to_markdown())
         return plan
 
 
 FLOAT = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
+_CONTROL_SKILLS = {
+    "send_action",
+    "move_arm_joints",
+    "set_gripper",
+    "set_base_velocity",
+    "set_lift_height",
+}
+
+_PLAN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "goal": {"type": "string"},
+        "steps": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "args_json": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+                "required": ["name", "args_json", "why"],
+                "additionalProperties": False,
+            },
+        },
+        "success_criteria": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+        "research_questions": {"type": "array", "items": {"type": "string"}},
+        "subagent_notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "goal",
+        "steps",
+        "success_criteria",
+        "risks",
+        "assumptions",
+        "research_questions",
+        "subagent_notes",
+    ],
+    "additionalProperties": False,
+}
+
+
+def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candidate_plan: dict[str, Any]) -> str:
+    payload = {
+        "role": "strategist",
+        "contract": (
+            "You are the LoopMaster Strategist subagent. Produce a registry-grounded plan for a "
+            "real robot or dry-run platform. Use only the provided skill names. Do not invent "
+            "simulation-only tools. Keep stop_motion at the end when any control skill appears. "
+            "For each step, encode skill arguments as a compact JSON object string in args_json. "
+            "Return only JSON matching the schema."
+        ),
+        "task": task,
+        "user_request": user_request,
+        "available_skills": [
+            {
+                "name": skill.name,
+                "category": skill.category,
+                "description": skill.description,
+                "is_user": skill.is_user,
+            }
+            for skill in skills
+        ],
+        "candidate_plan": candidate_plan,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _plan_to_dict(plan: Plan) -> dict[str, Any]:
+    return {
+        "task": plan.task,
+        "goal": plan.goal,
+        "steps": [{"name": step.name, "args": step.args, "why": step.why} for step in plan.steps],
+        "success_criteria": list(plan.success_criteria),
+        "risks": list(plan.risks),
+        "assumptions": list(plan.assumptions),
+        "research_questions": list(plan.research_questions),
+        "subagent_notes": list(plan.subagent_notes),
+    }
+
+
+def _plan_from_agent(data: dict[str, Any], *, fallback: Plan, available: set[str]) -> Plan:
+    steps: list[SkillCall] = []
+    for item in data.get("steps") or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        if name not in available:
+            continue
+        args = _decode_args(item)
+        steps.append(
+            SkillCall(
+                name=name,
+                args=args,
+                why=str(item.get("why") or ""),
+            )
+        )
+    if not steps:
+        steps = list(fallback.steps)
+    used_control = any(step.name in _CONTROL_SKILLS for step in steps)
+    if used_control and "stop_motion" in available and all(step.name != "stop_motion" for step in steps):
+        steps.append(
+            SkillCall(
+                "stop_motion",
+                {"reason": "strategist safety guardrail after Codex plan"},
+                "leave the real platform stationary before returning control",
+            )
+        )
+    notes = _strings(data.get("subagent_notes")) or list(fallback.subagent_notes)
+    codex = data.get("_codex")
+    if isinstance(codex, dict) and codex.get("profile"):
+        notes.append(f"Strategist ran through Codex profile {codex['profile']}.")
+    return Plan(
+        task=fallback.task,
+        goal=str(data.get("goal") or fallback.goal),
+        steps=steps,
+        success_criteria=_strings(data.get("success_criteria")) or list(fallback.success_criteria),
+        risks=_strings(data.get("risks")) or list(fallback.risks),
+        assumptions=_strings(data.get("assumptions")),
+        research_questions=_strings(data.get("research_questions")),
+        subagent_notes=notes,
+    )
+
+
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
+
+
+def _decode_args(item: dict[str, Any]) -> dict[str, Any]:
+    args_json = item.get("args_json")
+    if isinstance(args_json, str):
+        try:
+            decoded = json.loads(args_json)
+        except json.JSONDecodeError:
+            decoded = {}
+        return dict(decoded) if isinstance(decoded, dict) else {}
+    args = item.get("args")
+    return dict(args) if isinstance(args, dict) else {}
 
 
 def _wants_visual_evidence(text: str) -> bool:
@@ -122,6 +293,26 @@ def _wants_visual_evidence(text: str) -> bool:
         "场景",
         "探索",
     )
+    return any(item in text for item in keywords)
+
+
+def _wants_grasp_detection(text: str) -> bool:
+    keywords = (
+        "anygrasp",
+        "detect_grasps",
+        "grasp detection",
+        "grasp pose",
+        "grasp poses",
+        "find grasps",
+        "抓取检测",
+        "抓取位姿",
+        "抓取姿态",
+    )
+    return any(item in text for item in keywords)
+
+
+def _wants_anygrasp_check_only(text: str) -> bool:
+    keywords = ("check", "test", "dry run", "readiness", "测试", "检查", "自检")
     return any(item in text for item in keywords)
 
 
@@ -205,7 +396,9 @@ def _maybe_add_gripper(
         return False
     if position is None:
         research_questions.append("Gripper command requested but no numeric position was provided.")
-        assumptions.append("Open/close words are not mapped to numbers because the driver convention is hardware-specific.")
+        assumptions.append(
+            "Open/close words are not mapped to numbers because the driver convention is hardware-specific."
+        )
         return False
     steps.append(
         SkillCall(

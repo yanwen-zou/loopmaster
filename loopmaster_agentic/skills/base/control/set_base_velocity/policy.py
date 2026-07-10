@@ -10,5 +10,8 @@ def dispatch(context, args):
         }
     except (TypeError, ValueError):
         return {"ok": False, "error": "x, y, and theta must be numeric"}
-    sent = context.platform.send_action(action)
+    if hasattr(context.platform, "command_chassis"):
+        sent = context.platform.command_chassis(action["x.vel"], action["y.vel"], action["theta.vel"])
+    else:
+        sent = context.platform.send_action(action)
     return {"ok": True, "action_sent": sent}

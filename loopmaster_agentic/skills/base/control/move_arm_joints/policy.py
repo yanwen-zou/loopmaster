@@ -21,5 +21,8 @@ def dispatch(context, args):
             action[f"{side}_{joint}.pos"] = float(value)
     else:
         return {"ok": False, "error": "positions must be a list or dict"}
-    sent = context.platform.send_action(action)
+    if hasattr(context.platform, "command_arm"):
+        sent = context.platform.command_arm(side, positions)
+    else:
+        sent = context.platform.send_action(action)
     return {"ok": True, "action_sent": sent}

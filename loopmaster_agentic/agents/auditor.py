@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from loopmaster_agentic.agents.codex_subagent import SubagentClient
 from loopmaster_agentic.agents.workspace import Workspace
 from loopmaster_agentic.core.types import Plan, TraceStep
 
@@ -17,6 +19,7 @@ class Auditor:
         plan: Plan,
         trace: list[TraceStep],
         workspace: Workspace,
+        agent_client: SubagentClient | None = None,
     ) -> dict[str, Any]:
         failed = [step for step in trace if not step.ok]
         used_skills = {step.skill for step in trace}
@@ -67,8 +70,98 @@ class Auditor:
             "research_questions": list(plan.research_questions),
             "success": verdict == "done",
         }
+        if agent_client is not None:
+            agent_review = agent_client.run_json(
+                role=self.role_name,
+                prompt=_auditor_prompt(plan=plan, trace=trace, candidate_review=review),
+                schema=_AUDITOR_SCHEMA,
+            )
+            (workspace.root / "auditor_agent.json").write_text(
+                json.dumps(agent_review, indent=2, ensure_ascii=False, default=str) + "\n",
+                encoding="utf-8",
+            )
+            review = _review_from_agent(agent_review, fallback=review)
         workspace.write_review(_review_markdown(plan, review))
         return review
+
+
+_AUDITOR_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["done", "retry", "blocked", "research_needed"]},
+        "root_cause": {"type": "string"},
+        "next_action": {"type": "string"},
+        "used_skills": {"type": "array", "items": {"type": "string"}},
+        "used_control_skills": {"type": "array", "items": {"type": "string"}},
+        "sim_leak": {"type": "array", "items": {"type": "string"}},
+        "research_questions": {"type": "array", "items": {"type": "string"}},
+        "success": {"type": "boolean"},
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "verdict",
+        "root_cause",
+        "next_action",
+        "used_skills",
+        "used_control_skills",
+        "sim_leak",
+        "research_questions",
+        "success",
+        "notes",
+    ],
+    "additionalProperties": False,
+}
+
+
+def _auditor_prompt(*, plan: Plan, trace: list[TraceStep], candidate_review: dict[str, Any]) -> str:
+    payload = {
+        "role": "auditor",
+        "contract": (
+            "You are the LoopMaster Auditor subagent. Independently review the plan and trace. "
+            "Do not execute tools or edit files. Classify the run as done, retry, blocked, or "
+            "research_needed. Return only JSON matching the schema."
+        ),
+        "plan": {
+            "task": plan.task,
+            "goal": plan.goal,
+            "steps": [{"name": step.name, "args": step.args, "why": step.why} for step in plan.steps],
+            "research_questions": list(plan.research_questions),
+        },
+        "trace": [step.to_dict() for step in trace],
+        "candidate_review": candidate_review,
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _review_from_agent(data: dict[str, Any], *, fallback: dict[str, Any]) -> dict[str, Any]:
+    verdict = str(data.get("verdict") or fallback["verdict"])
+    if verdict not in {"done", "retry", "blocked", "research_needed"}:
+        verdict = str(fallback["verdict"])
+    review = {
+        "verdict": verdict,
+        "root_cause": str(data.get("root_cause") or ""),
+        "next_action": str(data.get("next_action") or ""),
+        "used_skills": _strings(data.get("used_skills")) or list(fallback.get("used_skills") or []),
+        "used_control_skills": _strings(data.get("used_control_skills"))
+        or list(fallback.get("used_control_skills") or []),
+        "sim_leak": _strings(data.get("sim_leak")) or list(fallback.get("sim_leak") or []),
+        "research_questions": _strings(data.get("research_questions"))
+        or list(fallback.get("research_questions") or []),
+        "success": bool(data.get("success")) and verdict == "done",
+    }
+    codex = data.get("_codex")
+    if isinstance(codex, dict):
+        review["_codex"] = dict(codex)
+    notes = _strings(data.get("notes"))
+    if notes:
+        review["notes"] = notes
+    return review
+
+
+def _strings(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value]
 
 
 def _review_markdown(plan: Plan, review: dict[str, Any]) -> str:
