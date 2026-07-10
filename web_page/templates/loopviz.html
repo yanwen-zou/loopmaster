@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoopViz · LoopMaster 四角色可视化</title>
+<link rel="stylesheet" href="/static/loopviz.css">
+</head>
+<body>
+<div class="top">
+  <div class="brand">
+    <span class="logo">🔁</span>
+    <div>LoopViz<small>LoopMaster · Handler / Strategist / Worker / Auditor</small></div>
+  </div>
+  <div class="spacer"></div>
+  <a class="backlink" href="/dashboard">📊 数据大屏</a>
+  <a class="backlink" href="/">← 下单页</a>
+  <select id="runSel" onchange="loadRun(this.value)"></select>
+  <span id="verdict" class="verdict-badge v-unknown">—</span>
+</div>
+
+<div class="pipeline" id="pipeline"></div>
+
+<div class="tabs" id="tabs"></div>
+
+<div class="wrap" id="view"></div>
+
+<script>
+let ROLES={}, SKILLS=[], RUN=null, CONTROL=[], TAB='overview';
+const ORDER=['handler','strategist','worker','auditor'];
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const jfmt=o=>{try{return JSON.stringify(o,null,2)}catch(e){return String(o)}};
+
+/* ------------ 数据小工具 ------------ */
+function execCounts(){const m={};(RUN?RUN.trace:[]).forEach(t=>m[t.skill]=(m[t.skill]||0)+1);return m;}
+function selectedSkills(){return new Set((RUN?RUN.plan.steps:[]).map(s=>s.skill));}
+
+/* ------------ 图表原语（纯 SVG / CSS，无外部依赖） ------------ */
+function donutSVG(segs,size){
+  size=size||132;
+  const total=segs.reduce((a,s)=>a+s.value,0)||1;
+  const r=size/2-11, cx=size/2, cy=size/2, C=2*Math.PI*r;
+  let off=0, arcs='';
+  segs.forEach(s=>{
+    if(s.value<=0) return;
+    const frac=s.value/total;
+    arcs+=`<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${s.color}" stroke-width="13"
+      stroke-dasharray="${(frac*C).toFixed(2)} ${C.toFixed(2)}" stroke-dashoffset="${(-off*C).toFixed(2)}"
+      transform="rotate(-90 ${cx} ${cy})"/>`;
+    off+=frac;
+  });
+  return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--line)" stroke-width="13"/>${arcs}</svg>`;
+}
+function donutCard(title,segs,big,sm){
+  const legend=segs.map(s=>`<div class="lg"><span class="dot" style="background:${s.color}"></span>${esc(s.label)}
+    <span class="lv">${s.value}</span></div>`).join('');
+  return `<div class="chart-card"><div class="ct"><span class="bar"></span>${title}</div>
+    <div class="donut-wrap">
+      <div class="donut-hole">${donutSVG(segs)}
+        <div class="donut-center"><div class="big">${esc(big)}</div><div class="sm">${esc(sm||'')}</div></div>
+      </div>
+      <div class="legend">${legend}</div>
+    </div></div>`;
+}
+function barsHTML(items){
+  if(!items.length) return '<div class="empty">无数据</div>';
+  const max=Math.max(...items.map(i=>i.value),1);
+  return `<div class="bars">`+items.map(i=>`<div class="barrow">
+    <div class="blabel">${esc(i.label)}</div>
+    <div class="btrack"><div class="bfill" style="width:${(i.value/max*100).toFixed(1)}%;background:${i.color||'var(--worker)'}"></div></div>
+    <div class="bval">${i.value}</div></div>`).join('')+`</div>`;
+}
+function barCard(title,items,hint){
+  return `<div class="chart-card"><div class="ct"><span class="bar"></span>${title}</div>
+    ${barsHTML(items)}${hint?`<div class="hint">${esc(hint)}</div>`:''}</div>`;
+}
+function funnelCard(title,steps){
+  const max=Math.max(...steps.map(s=>s.value),1);
+  return `<div class="chart-card"><div class="ct"><span class="bar"></span>${title}</div><div class="funnel">`+
+    steps.map(s=>`<div class="fstep"><div class="fl">${esc(s.label)}</div>
+      <div class="fbar" style="width:${Math.max(s.value/max*100,9).toFixed(1)}%;background:${s.color}">${s.value}</div></div>`).join('')+
+    `</div></div>`;
+}
+function chips(names,cls){
+  return names&&names.length
+    ? `<div class="chips">`+names.map(n=>`<span class="skchip ${cls||''}">${esc(n)}</span>`).join('')+`</div>`
+    : '<span class="dim">—</span>';
+}
+function skillCompositionCard(){
+  const g={};SKILLS.forEach(s=>g[s.group]=(g[s.group]||0)+1);
+  return donutCard('🧰 技能库构成',[
+    {label:'👁️ 感知 perception',value:g.perception||0,color:'#22d3ee'},
+    {label:'🦿 控制 control',value:g.control||0,color:'#f5a524'}],
+    SKILLS.length,'注册技能');
+}
+function skillChipsCard(){
+  const groups={};SKILLS.forEach(s=>(groups[s.group]=groups[s.group]||[]).push(s));
+  let inner='';
+  for(const g in groups){
+    inner+=`<div class="chip-group"><div class="cg-title">${g==='perception'?'👁️ 感知 perception':'🦿 控制 control'}</div>`+
+      chips(groups[g].map(s=>s.name), g==='control'?'ctl':'')+`</div>`;
+  }
+  return `<div class="chart-card"><div class="ct"><span class="bar"></span>🧰 共享技能注册表 · ${SKILLS.length}</div>${inner}</div>`;
+}
+
+/* ------------ 启动 / 加载 ------------ */
+async function boot(){
+  const s=await (await fetch('/api/loopviz/skills')).json();
+  SKILLS=s.skills; ROLES=s.roles;
+  const rs=await (await fetch('/api/loopviz/runs')).json();
+  const sel=document.getElementById('runSel');
+  if(!rs.runs.length){ sel.innerHTML='<option>无 run（先跑 loopmaster 产生产物）</option>'; renderPipeline(); renderTabs(); render(); return; }
+  sel.innerHTML=rs.runs.map(r=>`<option value="${esc(r.id)}">${esc(r.verdict)} · ${esc(r.task).slice(0,60)}</option>`).join('');
+  loadRun(rs.runs[0].id);
+}
+async function loadRun(id){
+  const d=await (await fetch('/api/loopviz/run/'+encodeURIComponent(id))).json();
+  if(!d.ok){ return; }
+  RUN=d.run; CONTROL=d.control_skills;
+  const vb=document.getElementById('verdict');
+  vb.textContent=RUN.verdict; vb.className='verdict-badge v-'+RUN.verdict;
+  renderPipeline(); renderTabs(); render();
+}
+
+/* ------------ 顶部流水线条 ------------ */
+function renderPipeline(){
+  const p=document.getElementById('pipeline');
+  p.innerHTML=ORDER.map((k,i)=>{
+    const r=ROLES[k];
+    return `<div class="pnode ${TAB===k?'active':''}" style="--nodec:${r.color}" onclick="go('${k}')">
+      <div class="ptitle"><span class="picon">${r.icon}</span>${r.name}<span class="pcn">${r.cn}</span></div>
+      <div class="pduty">${esc(r.duty_cn)}</div>
+      <div class="pstat">${nodeStat(k)}</div></div>`+
+      (i<ORDER.length-1?'<div class="arrow">→</div>':'');
+  }).join('');
+}
+function nodeStat(k){
+  if(!RUN) return '';
+  if(k==='handler') return `<span class="chip c">run ${esc(RUN.run_id)}</span><span class="chip">${RUN.artifacts.length} 产物</span>`;
+  if(k==='strategist') return `<span class="chip c">${RUN.plan.steps.length} 步计划</span><span class="chip">${RUN.plan.research_questions.length?'需研究':'可执行'}</span>`;
+  if(k==='worker'){const t=RUN.trace_stats;return `<span class="chip c">${t.total} 次执行</span><span class="chip" style="color:${t.fail?'#f87171':'#34d399'}">${t.ok}✓ ${t.fail}✗</span>`;}
+  if(k==='auditor') return `<span class="chip c">${esc(RUN.verdict)}</span>`;
+  return '';
+}
+function renderTabs(){
+  const items=[['overview','🗺️ 总览']].concat(ORDER.map(k=>[k,ROLES[k].icon+' '+ROLES[k].name]));
+  document.getElementById('tabs').innerHTML=items.map(([k,l])=>
+    `<div class="tab ${TAB===k?'active':''}" onclick="go('${k}')">${l}</div>`).join('');
+}
+function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
+function render(){
+  const v=document.getElementById('view');
+  v.innerHTML = TAB==='overview' ? viewOverview() : viewAgent(TAB);
+}
+
+/* ------------ 总览：图表仪表盘 ------------ */
+function viewOverview(){
+  if(!SKILLS.length) return '<div class="panel"><div class="empty">加载中…</div></div>';
+  if(!RUN) return `<div class="chart-grid">${skillCompositionCard()}${skillChipsCard()}</div>`;
+
+  const t=RUN.trace_stats, sel=selectedSkills().size, rate=t.total?Math.round(t.ok/t.total*100):0;
+  const execBars=Object.entries(execCounts()).sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>({label:k,value:v,color:'var(--worker)'}));
+
+  const banner=`<div class="run-banner">
+    <div class="rb-task"><span class="rb-ico">🎯</span>
+      <div><div class="rb-t">${esc(RUN.task)}</div>
+        <div class="rb-sub mono">run ${esc(RUN.run_id)} · ${RUN.artifacts.length} 产物</div></div></div>
+    <span class="verdict-badge v-${RUN.verdict}">${esc(RUN.verdict)}</span>
+  </div>`;
+
+  const stat=`<div class="stat-row">
+    <div class="stat-box"><div class="n">${SKILLS.length}</div><div class="l">注册技能</div></div>
+    <div class="stat-box"><div class="n" style="color:var(--strategist)">${sel}</div><div class="l">计划选用</div></div>
+    <div class="stat-box"><div class="n" style="color:var(--worker)">${t.total}</div><div class="l">执行次数</div></div>
+    <div class="stat-box"><div class="n" style="color:${t.fail?'var(--fail)':'var(--ok)'}">${rate}%</div><div class="l">成功率</div></div>
+  </div>`;
+
+  const charts=`<div class="chart-grid">
+    ${donutCard('🦾 执行成功率',[{label:'成功',value:t.ok,color:'var(--ok)'},{label:'失败',value:t.fail,color:'var(--fail)'}],rate+'%','success')}
+    ${funnelCard('🔻 闭环漏斗 registry → done',[
+      {label:'注册技能',value:SKILLS.length,color:'var(--handler)'},
+      {label:'计划选用',value:sel,color:'var(--strategist)'},
+      {label:'实际执行',value:t.total,color:'var(--worker)'},
+      {label:'执行成功',value:t.ok,color:'var(--ok)'}])}
+    ${barCard('⚙️ 各技能执行次数',execBars,'控制动作后 Worker 自动注入 observe —— 闭环证据')}
+    ${skillCompositionCard()}
+  </div>`;
+
+  return banner+stat+charts+`<div style="margin-top:16px">${skillChipsCard()}</div>`;
+}
+
+/* ------------ 角色详情：左图表 + 右说明 ------------ */
+function heroHTML(k){
+  const r=ROLES[k];
+  return `<div class="agent-hero" style="--accent:${r.color}">
+    <div class="h"><span class="ico">${r.icon}</span>
+      <div><div class="nm">${r.name}</div><div class="cn">${r.cn} · ${esc(r.duty)}</div></div></div>
+    <div class="duty">${esc(r.duty_cn)}</div>
+    <div class="contract"><b>契约 contract：</b>${esc(r.contract)}</div>
+  </div>`;
+}
+function viewAgent(k){
+  const hero=heroHTML(k);
+  if(!RUN) return hero+'<div class="panel"><div class="empty">暂无 run 数据</div></div>';
+  return hero+`<div class="grid2" style="--accent:${ROLES[k].color}">
+    <div class="col">${agentChart(k)}</div>
+    <div class="col">${agentDetail(k)}</div>
+  </div>`;
+}
+
+function agentChart(k){
+  const t=RUN.trace_stats, rate=t.total?Math.round(t.ok/t.total*100):0;
+  if(k==='handler'){
+    return funnelCard('🔻 Handler 主导的闭环',[
+      {label:'注册技能',value:SKILLS.length,color:'var(--handler)'},
+      {label:'计划选用',value:selectedSkills().size,color:'var(--strategist)'},
+      {label:'实际执行',value:t.total,color:'var(--worker)'},
+      {label:'执行成功',value:t.ok,color:'var(--ok)'}]);
+  }
+  if(k==='strategist'){
+    const sel=selectedSkills();
+    return donutCard('🧭 技能选用',[
+      {label:'已选 selected',value:sel.size,color:'var(--strategist)'},
+      {label:'未选',value:Math.max(SKILLS.length-sel.size,0),color:'var(--panel3)'}],
+      RUN.plan.steps.length,'计划步骤')+
+      `<div class="chart-card"><div class="ct"><span class="bar"></span>已选技能</div>${chips([...sel])}</div>`;
+  }
+  if(k==='worker'){
+    const execBars=Object.entries(execCounts()).sort((a,b)=>b[1]-a[1])
+      .map(([kk,v])=>({label:kk,value:v,color:'var(--worker)'}));
+    return donutCard('🦾 执行成功率',[{label:'成功',value:t.ok,color:'var(--ok)'},{label:'失败',value:t.fail,color:'var(--fail)'}],rate+'%','success')+
+      barCard('⚙️ 各技能执行次数',execBars);
+  }
+  if(k==='auditor'){
+    const used=RUN.review.used_skills.length, leak=RUN.review.sim_leak;
+    return donutCard('🔍 审计技能覆盖',[
+      {label:'用到 used',value:used,color:'var(--auditor)'},
+      {label:'其余',value:Math.max(SKILLS.length-used,0),color:'var(--panel3)'}],
+      used,'used skills')+
+      `<div class="chart-card"><div class="ct"><span class="bar"></span>仿真泄漏检测</div>
+        <div class="leak ${leak.length?'bad':'ok'}">${leak.length?('⚠ 检出：'+esc(leak.join(', '))):'✓ clean · 无仿真泄漏'}</div></div>`;
+  }
+  return '';
+}
+
+function agentDetail(k){
+  if(k==='handler'){
+    let h=`<div class="panel"><h3><span class="bar"></span>⚙️ 交接与产物</h3>
+      <div class="handoff">${ORDER.map((x,i)=>`<span class="ho" style="--c:${ROLES[x].color}">${ROLES[x].icon} ${ROLES[x].name}</span>`+
+        (i<ORDER.length-1?'<span class="hoar">→</span>':'')).join('')}</div>
+      <div class="kv"><div class="k">最终结果</div><div class="v"><b style="color:${RUN.success?'var(--ok)':'var(--warn)'}">${RUN.success?'success ✓':esc(RUN.verdict)}</b></div></div>
+      <div class="kv"><div class="k">产出文件</div><div class="v">${chips(RUN.artifacts)}</div></div>
+      <div class="kv"><div class="k">workspace</div><div class="v mono" style="font-size:11px">${esc(RUN.dir)}</div></div>`;
+    const aj=RUN.agent_json.handler;
+    if(aj) h+=agentJsonBlock('Handler Codex 输出',aj);
+    else h+=`<div class="hint">本地模式（--local-agents）无 handler_agent.json；接 Codex 时记录 run_intent / handoff_notes。</div>`;
+    return h+`</div>`;
+  }
+  if(k==='strategist'){
+    const p=RUN.plan;
+    let h=`<div class="panel"><h3><span class="bar"></span>🧭 计划 plan.md</h3>
+      <div class="kv"><div class="k">目标 goal</div><div class="v">${esc(p.goal)}</div></div>`;
+    h+=p.steps.map((s,i)=>`<div class="li"><b class="mono">${i+1}. ${esc(s.skill)}</b>
+      ${CONTROL.includes(s.skill)?'<span class="badge b-control">control</span>':''}
+      <div class="muted" style="font-size:12px;margin-top:3px">${esc(s.why)}</div></div>`).join('');
+    h+=listBlock('✅ 成功判据',p.success_criteria);
+    h+=listBlock('⚠️ 风险',p.risks);
+    if(p.research_questions.length) h+=listBlock('🔬 研究问题（缺失技能）',p.research_questions,true);
+    return h+`</div>`;
+  }
+  if(k==='worker'){
+    const tr=RUN.trace;
+    let h=`<div class="panel"><h3><span class="bar"></span>🦾 执行时间线</h3>`;
+    if(!tr.length) h+='<div class="empty">未产生轨迹（proceed=false 或空计划）</div>';
+    else{
+      h+=`<div class="tl">`+tr.map(s=>`<div class="tstep ${s.ok?'ok':'bad'}">
+        <div class="idx">${s.index}</div>
+        <div class="body"><div class="sk">${esc(s.skill)} ${s.ok?'✓':'✗'}</div>
+          <div class="why">${esc(s.why)}</div>
+          <div class="meta"><span class="role-tag role-${esc(s.role||'worker')}">${esc(s.role||'worker')}</span></div>
+        </div></div>`).join('')+`</div>`;
+      h+=`<div class="hint">control 动作后自动注入的 <span class="role-tag role-worker.monitor">worker.monitor</span> observe = 闭环证据</div>`;
+    }
+    if(RUN.summary_md) h+=`<h3 style="margin-top:16px"><span class="bar"></span>summary.md</h3><pre class="raw">${esc(RUN.summary_md)}</pre>`;
+    return h+`</div>`;
+  }
+  if(k==='auditor'){
+    const rv=RUN.review;
+    let h=`<div class="panel"><h3><span class="bar"></span>🔍 审计结论</h3>
+      <div class="kv"><div class="k">判定 verdict</div><div class="v"><span class="verdict-badge v-${rv.verdict}">${esc(rv.verdict)}</span></div></div>
+      <div class="kv"><div class="k">根因 root_cause</div><div class="v">${esc(rv.root_cause)||'<span class="dim">（无）</span>'}</div></div>
+      <div class="kv"><div class="k">下一步 next</div><div class="v">${esc(rv.next_action)||'<span class="dim">（无）</span>'}</div></div>
+      <div class="kv"><div class="k">用到技能</div><div class="v">${chips(rv.used_skills)}</div></div>
+      <div class="kv"><div class="k">控制技能</div><div class="v">${chips(rv.used_control_skills,'ctl')}</div></div>`;
+    if(rv.research_questions.length) h+=listBlock('🔬 需研究 / 缺失可学习技能',rv.research_questions,true);
+    return h+`</div>`;
+  }
+  return '';
+}
+
+function listBlock(title,items,warn){
+  if(!items||!items.length) return '';
+  return `<h3 style="margin-top:16px"><span class="bar"></span>${title}</h3>`+
+    items.map(x=>`<div class="li ${warn?'warnrow':''}">${esc(x)}</div>`).join('');
+}
+function agentJsonBlock(title,obj){
+  return `<h3 style="margin-top:16px"><span class="bar"></span>${esc(title)}</h3><pre class="raw">${esc(jfmt(obj))}</pre>`;
+}
+
+boot();
+</script>
+</body>
+</html>

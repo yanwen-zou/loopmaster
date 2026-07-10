@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>叫卖侠 · 后台管理</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <span class="logo">⚙️</span>
+    <div>叫卖侠 后台<br><small>商品 · 库存管理</small></div>
+  </div>
+  <div class="links"><a href="/dashboard">数据大屏</a><a href="/">下单页</a></div>
+</div>
+
+<div class="wrap">
+  <div class="section-title">➕ 新增货品</div>
+  <div class="login-card" style="margin:0;max-width:none">
+    <div class="two-col">
+      <div><label>商品名</label><input id="p_name" placeholder="如：怡宝矿泉水"></div>
+      <div><label>分类</label>
+        <select id="p_cat"><option>饮料</option><option>零食</option></select></div>
+    </div>
+    <div class="two-col">
+      <div><label>售价（元 / 月亮币）</label><input id="p_price" type="number" step="0.5" placeholder="3.0"></div>
+      <div><label>初始库存</label><input id="p_stock" type="number" placeholder="20"></div>
+    </div>
+    <div><label>图标 Emoji</label><input id="p_emoji" placeholder="🥤" maxlength="4"></div>
+    <button class="btn mt" onclick="addProduct()">加入货篮商品库</button>
+  </div>
+
+  <div class="section-title">💾 数据备份</div>
+  <div class="login-card" style="margin:0 0 8px;max-width:none">
+    <p class="muted" style="margin-bottom:14px;font-size:13px">
+      所有账号余额、订单、统计都存在 <code>vending.db</code>。服务器每次启动会自动快照到
+      <code>backup/</code>；也可随时手动备份或下载数据库离线保存。</p>
+    <div class="two-col">
+      <button class="btn" onclick="doBackup()">📦 立即备份数据库</button>
+      <a class="btn ghost" href="/api/download-db" style="text-align:center;line-height:1.4">⬇ 下载 vending.db</a>
+    </div>
+    <div id="backupList" class="mt muted" style="font-size:12px"></div>
+  </div>
+
+  <div class="section-title">📦 库存管理 / 补货</div>
+  <table>
+    <thead><tr><th>ID</th><th>商品</th><th>分类</th><th>售价</th><th>库存</th><th>补货</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+function toast(msg,type){
+  const t=document.getElementById('toast');
+  t.textContent=msg; t.className='toast show '+(type||'');
+  clearTimeout(window._t); window._t=setTimeout(()=>t.className='toast',2400);
+}
+async function load(){
+  const d = await (await fetch('/api/products')).json();
+  document.getElementById('rows').innerHTML = d.products.map(p=>`
+    <tr>
+      <td>${p.id}</td><td>${p.emoji} ${p.name}</td><td>${p.category}</td>
+      <td style="color:var(--orange)">☾${p.price.toFixed(1)}</td>
+      <td class="${p.stock<=5?'':''}" style="${p.stock<=5?'color:var(--red)':''}">${p.stock}</td>
+      <td>
+        <input type="number" id="add${p.id}" placeholder="+数量" style="width:90px;display:inline-block;padding:7px">
+        <button class="btn sm" style="width:auto" onclick="restock(${p.id})">补货</button>
+      </td>
+    </tr>`).join('');
+}
+async function addProduct(){
+  const body = {
+    name: p_name.value.trim(), category: p_cat.value,
+    price: p_price.value, stock: p_stock.value, emoji: p_emoji.value.trim()||'📦'
+  };
+  if(!body.name){ toast('请填商品名','err'); return; }
+  const d = await (await fetch('/api/products',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+  if(!d.ok){ toast(d.msg||'失败','err'); return; }
+  toast('✅ 已新增商品 #'+d.id,'ok');
+  p_name.value=p_price.value=p_stock.value=p_emoji.value='';
+  load();
+}
+async function restock(id){
+  const add = document.getElementById('add'+id).value;
+  if(!add){ toast('请填补货数量','err'); return; }
+  const d = await (await fetch('/api/products/'+id+'/restock',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({add})})).json();
+  if(!d.ok){ toast(d.msg||'失败','err'); return; }
+  toast('✅ 库存已更新为 '+d.stock,'ok'); load();
+}
+async function doBackup(){
+  const d = await (await fetch('/api/backup',{method:'POST'})).json();
+  if(!d.ok){ toast(d.msg||'备份失败','err'); return; }
+  toast('✅ 已备份：'+d.file+'（共 '+d.total+' 份）','ok');
+  loadBackups();
+}
+async function loadBackups(){
+  const d = await (await fetch('/api/backups')).json();
+  if(!d.ok || !d.backups.length){ document.getElementById('backupList').textContent='（暂无备份）'; return; }
+  document.getElementById('backupList').innerHTML =
+    '最近备份（共 '+d.backups.length+' 份）：<br>' +
+    d.backups.slice(0,5).map(b=>`· ${b.name}　${b.mtime}　${(b.size/1024).toFixed(0)}KB`).join('<br>');
+}
+load();
+loadBackups();
+</script>
+</body>
+</html>

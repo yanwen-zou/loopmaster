@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>叫卖侠 · 数据大屏</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <span class="logo">📊</span>
+    <div>叫卖侠 数据大屏<br><small>双臂销售机器人 · 实时运营</small></div>
+  </div>
+  <div class="links">
+    <span class="muted" id="clock">—</span>
+    <a href="/loopviz">🔁 智能体可视化</a>
+    <a href="/">← 下单页</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="section-title">📈 核心指标</div>
+  <div class="stats-grid">
+    <div class="stat"><div class="k">扫码打开次数</div><div class="v white" id="s_visits">0</div><div class="sub">网页访问总量</div></div>
+    <div class="stat"><div class="k">下单次数</div><div class="v" id="s_orders">0</div><div class="sub">累计订单</div></div>
+    <div class="stat"><div class="k">销售总金额</div><div class="v" id="s_sales">☾0</div><div class="sub">月亮币 / 人民币</div></div>
+    <div class="stat"><div class="k">注册用户</div><div class="v white" id="s_users">0</div><div class="sub">扫码建档人数</div></div>
+  </div>
+
+  <div class="section-title">🦾 双臂机械臂执行</div>
+  <div class="stats-grid">
+    <div class="stat"><div class="k">执行总次数</div><div class="v white" id="s_exec">0</div><div class="sub">抓取动作次数</div></div>
+    <div class="stat"><div class="k">成功次数</div><div class="v" id="s_ok" style="color:var(--green)">0</div><div class="sub">货品成功送达</div></div>
+    <div class="stat"><div class="k">失败次数</div><div class="v" id="s_fail" style="color:var(--red)">0</div><div class="sub">抓取失败/重试</div></div>
+    <div class="stat"><div class="k">成功率</div><div class="v" id="s_rate">—</div><div class="sub">success / exec</div></div>
+  </div>
+
+  <div class="section-title">🧾 最近订单（含下单时间点）</div>
+  <table>
+    <thead><tr>
+      <th>#</th><th>用户</th><th>IP</th><th>明细</th><th>金额</th>
+      <th>状态</th><th>机械臂(执/成/败)</th><th>下单时间</th>
+    </tr></thead>
+    <tbody id="orderRows"><tr><td colspan="8" class="muted center">暂无订单</td></tr></tbody>
+  </table>
+</div>
+
+<script>
+function fmtItems(js){
+  try{ const a = JSON.parse(js); return a.map(i=>`${i.emoji||''}${i.name}×${i.qty}`).join('，'); }
+  catch(e){ return '—'; }
+}
+async function refresh(){
+  const d = await (await fetch('/api/stats')).json();
+  s_visits.textContent = d.page_visits;
+  s_orders.textContent = d.order_count;
+  s_sales.textContent = '☾' + d.total_sales.toFixed(1);
+  s_users.textContent = d.user_count;
+  s_exec.textContent = d.arm_exec;
+  s_ok.textContent = d.arm_success;
+  s_fail.textContent = d.arm_fail;
+  s_rate.textContent = d.arm_exec ? (100*d.arm_success/d.arm_exec).toFixed(1)+'%' : '—';
+
+  const rows = d.recent_orders.map(o => `
+    <tr>
+      <td>${o.id}</td><td>${o.user_id}</td><td class="muted">${o.ip||''}</td>
+      <td>${fmtItems(o.items)}</td><td class="price" style="color:var(--orange)">☾${o.total.toFixed(1)}</td>
+      <td><span class="tag ${o.status}">${({success:'成功',partial:'部分',failed:'失败'})[o.status]}</span></td>
+      <td>${o.arm_exec}/${o.arm_success}/${o.arm_fail}</td>
+      <td class="muted">${o.created_at}</td>
+    </tr>`).join('');
+  document.getElementById('orderRows').innerHTML = rows ||
+    '<tr><td colspan="8" class="muted center">暂无订单</td></tr>';
+}
+function tick(){ document.getElementById('clock').textContent = new Date().toLocaleString('zh-CN'); }
+refresh(); tick();
+setInterval(refresh, 3000);
+setInterval(tick, 1000);
+</script>
+</body>
+</html>

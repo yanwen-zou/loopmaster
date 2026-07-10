@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<title>叫卖侠 · 自助售卖</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <span class="logo">🤖</span>
+    <div>叫卖侠<br><small>双臂销售机器人 · 自助下单</small></div>
+  </div>
+  <div class="links">
+    <div class="wallet" id="walletBox" style="display:none">
+      <span id="uidLabel">—</span>｜<span class="coin">☾ <span id="coinLabel">0</span></span>
+    </div>
+    <a href="/loopviz" target="_blank" class="agentloop">🔁 Agent Loop</a>
+    <a href="/dashboard" target="_blank">数据大屏</a>
+    <a href="/admin" target="_blank">后台</a>
+  </div>
+</div>
+
+<!-- 登录 -->
+<div id="loginView">
+  <div class="login-card">
+    <h1>👋 欢迎光临叫卖侠</h1>
+    <p>移动升降底盘 + 双臂抓取。<b>点选商品 → 确认 → 机械臂即刻为你抓取</b>，无需购物车。<br>
+       老用户输入用户名即可登录（余额保留）；新用户输入名字即注册开户。</p>
+    <div class="gift">🎁 新用户注册即送 <b>200 月亮币</b>（1 月亮币 = 1 元人民币）<br>
+       💾 所有余额、订单、统计永久保存，重启不丢失</div>
+    <label>用户名 / ID</label>
+    <input id="uidInput" placeholder="老用户输原用户名登录，新用户输名字注册" autocomplete="off">
+    <button class="btn mt" onclick="login()">进入商店 →</button>
+  </div>
+</div>
+
+<!-- 商店 -->
+<div id="shopView" class="wrap hidden" style="padding-bottom:40px">
+  <div id="catalog"></div>
+</div>
+
+<!-- 点击商品：确认 -> 机械臂抓取 -> 结果 -->
+<div id="modalMask" class="modal-mask hidden" onclick="if(event.target===this && !BUSY)closeItem()">
+  <div class="modal">
+    <!-- 1. 确认视图 -->
+    <div id="mConfirm">
+      <div class="m-emoji" id="mEmoji">🥤</div>
+      <div class="m-title">确认选购？确定后机械臂立即抓取</div>
+      <div class="m-name" id="mName">商品名</div>
+      <div class="m-price">单价 <b>☾<span id="mPrice">0</span></b></div>
+      <div class="m-qty">
+        <span>数量</span>
+        <div class="qty-ctrl">
+          <button onclick="mStep(-1)">−</button>
+          <span id="mQty">1</span>
+          <button onclick="mStep(1)">+</button>
+        </div>
+      </div>
+      <div class="m-sub" id="mSub">合计 ☾0</div>
+      <div class="m-actions">
+        <button class="btn ghost" onclick="closeItem()">取消</button>
+        <button class="btn" onclick="confirmItem()">🦾 确认选购</button>
+      </div>
+    </div>
+    <!-- 2. 抓取中视图 -->
+    <div id="mGrab" class="hidden">
+      <div class="m-emoji arm-anim">🦾</div>
+      <div class="m-name">机械臂抓取中…</div>
+      <div class="m-title" id="mGrabName">正在抓取商品</div>
+    </div>
+    <!-- 3. 结果视图 -->
+    <div id="mResult" class="hidden">
+      <div class="m-emoji" id="rIcon">✅</div>
+      <div class="m-name" id="rTitle">抓取成功</div>
+      <div class="r-detail" id="rDetail"></div>
+      <div class="m-actions">
+        <button class="btn" onclick="closeItem()">完成</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+let USER = null;      // {user_id, coins}
+let PRODUCTS = [];
+let MODAL_ID = null, MODAL_QTY = 1, BUSY = false;
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+function toast(msg, type){
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast show ' + (type||'');
+  clearTimeout(window._tt);
+  window._tt = setTimeout(()=>t.className='toast', 2600);
+}
+
+async function login(){
+  const uid = document.getElementById('uidInput').value.trim();
+  if(!uid){ toast('请输入用户 ID', 'err'); return; }
+  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({user_id: uid})});
+  const d = await r.json();
+  if(!d.ok){ toast(d.msg||'登录失败', 'err'); return; }
+  USER = {user_id: d.user_id, coins: d.coins};
+  document.getElementById('loginView').classList.add('hidden');
+  document.getElementById('shopView').classList.remove('hidden');
+  document.getElementById('walletBox').style.display = 'flex';
+  document.getElementById('uidLabel').textContent = d.user_id;
+  updateWallet();
+  if(d.is_new) toast('🎁 欢迎新用户！已到账 '+d.gift+' 月亮币', 'ok');
+  else toast('欢迎回来，'+d.user_id+'（IP '+d.ip+'）', 'ok');
+  loadProducts();
+}
+
+function updateWallet(){ document.getElementById('coinLabel').textContent = USER.coins.toFixed(0); }
+
+async function loadProducts(){
+  const r = await fetch('/api/products');
+  const d = await r.json();
+  PRODUCTS = d.products;
+  render();
+}
+
+function render(){
+  const cats = {};
+  PRODUCTS.forEach(p => { (cats[p.category] = cats[p.category] || []).push(p); });
+  let html = '';
+  for(const cat in cats){
+    html += `<div class="section-title">${cat==='饮料'?'🥤':'🍪'} ${cat}</div><div class="grid">`;
+    cats[cat].forEach(p => {
+      const out = p.stock <= 0;
+      html += `
+      <div class="card ${out?'out':''}" ${out?'':`onclick="askItem(${p.id})"`}>
+        <div class="emoji">${p.emoji}</div>
+        <div class="name">${p.name}</div>
+        <div class="row">
+          <span class="price">${p.price.toFixed(1)}</span>
+          <span class="stock ${p.stock<=5?'low':''}">剩 ${p.stock}</span>
+        </div>
+        <div class="row">
+          ${out ? '<span class="muted">已售罄</span>' : '<span class="tap">👆 点击选购</span>'}
+        </div>
+      </div>`;
+    });
+    html += '</div>';
+  }
+  document.getElementById('catalog').innerHTML = html;
+}
+
+// ===== 点击商品 -> 确认 -> 机械臂抓取 =====
+function showState(s){
+  document.getElementById('mConfirm').classList.toggle('hidden', s!=='confirm');
+  document.getElementById('mGrab').classList.toggle('hidden', s!=='grab');
+  document.getElementById('mResult').classList.toggle('hidden', s!=='result');
+}
+
+function askItem(id){
+  const p = PRODUCTS.find(x=>x.id===id);
+  if(!p || p.stock<=0){ toast('已售罄', 'err'); return; }
+  MODAL_ID = id;
+  MODAL_QTY = 1;
+  document.getElementById('mEmoji').textContent = p.emoji;
+  document.getElementById('mName').textContent = p.name;
+  document.getElementById('mPrice').textContent = p.price.toFixed(1);
+  syncModal();
+  showState('confirm');
+  document.getElementById('modalMask').classList.remove('hidden');
+}
+function mStep(d){
+  const p = PRODUCTS.find(x=>x.id===MODAL_ID);
+  MODAL_QTY = Math.max(1, Math.min(p.stock, MODAL_QTY + d));   // 1..剩余库存
+  syncModal();
+}
+function syncModal(){
+  const p = PRODUCTS.find(x=>x.id===MODAL_ID);
+  document.getElementById('mQty').textContent = MODAL_QTY;
+  document.getElementById('mSub').textContent = '合计 ☾' + (p.price*MODAL_QTY).toFixed(1);
+}
+
+async function confirmItem(){
+  if(BUSY) return;
+  const p = PRODUCTS.find(x=>x.id===MODAL_ID);
+  if(MODAL_QTY > p.stock){ toast('库存不足', 'err'); return; }
+  if(USER.coins < p.price*MODAL_QTY){ toast('月亮币不足', 'err'); return; }
+
+  BUSY = true;
+  document.getElementById('mGrabName').textContent = `正在抓取 ${p.emoji}${p.name} ×${MODAL_QTY}`;
+  showState('grab');
+  await sleep(900);   // 让"机械臂抓取中"动画呈现
+
+  let d;
+  try{
+    const r = await fetch('/api/order', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id: USER.user_id, items:[{id: MODAL_ID, qty: MODAL_QTY}]})});
+    d = await r.json();
+  }catch(e){ d = {ok:false, msg:'网络错误'}; }
+  BUSY = false;
+
+  if(!d.ok){ showState('confirm'); toast(d.msg||'下单失败', 'err'); return; }
+
+  USER.coins = d.coins;
+  updateWallet();
+  const a = d.arm;
+  const rIcon = document.getElementById('rIcon');
+  const rTitle = document.getElementById('rTitle');
+  if(d.status==='success'){ rIcon.textContent='✅'; rTitle.textContent='抓取成功'; }
+  else if(d.status==='partial'){ rIcon.textContent='⚠️'; rTitle.textContent='部分抓取成功'; }
+  else { rIcon.textContent='❌'; rTitle.textContent='抓取失败'; }
+  document.getElementById('rDetail').innerHTML =
+    `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` +
+    (d.paid>0 ? `已扣 <b class="coin">☾${d.paid.toFixed(0)}</b>，余额 ☾${d.coins.toFixed(0)}`
+              : '本次未扣款');
+  showState('result');
+  loadProducts();   // 后台刷新库存
+}
+
+function closeItem(){
+  if(BUSY) return;
+  MODAL_ID = null;
+  document.getElementById('modalMask').classList.add('hidden');
+  showState('confirm');
+}
+
+document.getElementById('uidInput').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
+</script>
+</body>
+</html>

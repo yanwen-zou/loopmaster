@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoopViz · LoopMaster 四角色可视化</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="top">
+  <div class="brand">
+    <span class="logo">🔁</span>
+    <div>LoopViz<small>LoopMaster · Handler / Strategist / Worker / Auditor</small></div>
+  </div>
+  <div class="spacer"></div>
+  <select id="runSel" onchange="loadRun(this.value)"></select>
+  <span id="verdict" class="verdict-badge v-unknown">—</span>
+</div>
+
+<div class="pipeline" id="pipeline"></div>
+
+<div class="tabs" id="tabs"></div>
+
+<div class="wrap" id="view"></div>
+
+<script>
+let ROLES={}, SKILLS=[], RUN=null, CONTROL=[], TAB='overview';
+const ORDER=['handler','strategist','worker','auditor'];
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const jfmt=o=>{try{return JSON.stringify(o,null,2)}catch(e){return String(o)}};
+
+async function boot(){
+  const s=await (await fetch('/api/skills')).json();
+  SKILLS=s.skills; ROLES=s.roles;
+  const rs=await (await fetch('/api/runs')).json();
+  const sel=document.getElementById('runSel');
+  if(!rs.runs.length){ sel.innerHTML='<option>无 run（先跑 loopmaster 产生产物）</option>'; renderPipeline(); renderTabs(); render(); return; }
+  sel.innerHTML=rs.runs.map(r=>`<option value="${esc(r.id)}">${esc(r.verdict)} · ${esc(r.task).slice(0,60)}</option>`).join('');
+  loadRun(rs.runs[0].id);
+}
+
+async function loadRun(id){
+  const d=await (await fetch('/api/run/'+encodeURIComponent(id))).json();
+  if(!d.ok){ return; }
+  RUN=d.run; CONTROL=d.control_skills;
+  const vb=document.getElementById('verdict');
+  vb.textContent=RUN.verdict; vb.className='verdict-badge v-'+RUN.verdict;
+  renderPipeline(); renderTabs(); render();
+}
+
+function renderPipeline(){
+  const p=document.getElementById('pipeline');
+  let html='';
+  ORDER.forEach((k,i)=>{
+    const r=ROLES[k]; const stat=nodeStat(k);
+    html+=`<div class="pnode ${TAB===k?'active':''}" style="--nodec:${r.color}" onclick="go('${k}')">
+      <div class="ptitle"><span class="picon">${r.icon}</span>${r.name}
+        <span class="pcn">${r.cn}</span></div>
+      <div class="pduty">${esc(r.duty_cn)}</div>
+      <div class="pstat">${stat}</div></div>`;
+    if(i<ORDER.length-1) html+=`<div class="arrow">→</div>`;
+  });
+  p.innerHTML=html;
+}
+
+function nodeStat(k){
+  if(!RUN) return '';
+  if(k==='handler') return `<span class="chip c">run ${esc(RUN.run_id)}</span><span class="chip">${RUN.artifacts.length} 产物</span>`;
+  if(k==='strategist') return `<span class="chip c">${RUN.plan.steps.length} 步计划</span><span class="chip">${RUN.plan.research_questions.length? '需研究':'可执行'}</span>`;
+  if(k==='worker'){const t=RUN.trace_stats;return `<span class="chip c">${t.total} 次执行</span><span class="chip" style="color:${t.fail?'#f87171':'#34d399'}">${t.ok}✓ ${t.fail}✗</span>`;}
+  if(k==='auditor') return `<span class="chip c">${esc(RUN.verdict)}</span>`;
+  return '';
+}
+
+function renderTabs(){
+  const t=document.getElementById('tabs');
+  const items=[['overview','🗺️ 全景 & 技能库']].concat(ORDER.map(k=>[k,ROLES[k].icon+' '+ROLES[k].name]));
+  t.innerHTML=items.map(([k,l])=>`<div class="tab ${TAB===k?'active':''}" onclick="go('${k}')">${l}</div>`).join('');
+}
+function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
+
+function render(){
+  const v=document.getElementById('view');
+  if(TAB==='overview') return v.innerHTML=viewOverview();
+  v.innerHTML=viewAgent(TAB);
+}
+
+/* ---------- Overview ---------- */
+function viewOverview(){
+  const groups={};
+  SKILLS.forEach(s=>{(groups[s.group]=groups[s.group]||[]).push(s);});
+  let sk='';
+  for(const g in groups){
+    sk+=`<h3><span class="bar"></span>${g==='perception'?'👁️ 感知 perception':'🦿 控制 control'} · ${groups[g].length}</h3>`;
+    sk+=groups[g].map(skillCard).join('');
+  }
+  let stats='';
+  if(RUN){
+    const t=RUN.trace_stats;
+    stats=`<div class="stat-row">
+      <div class="stat-box"><div class="n">${SKILLS.length}</div><div class="l">注册技能</div></div>
+      <div class="stat-box"><div class="n" style="color:var(--strategist)">${RUN.plan.steps.length}</div><div class="l">计划步骤</div></div>
+      <div class="stat-box"><div class="n" style="color:var(--worker)">${t.total}</div><div class="l">执行次数</div></div>
+      <div class="stat-box"><div class="n" style="color:${t.fail?'#f87171':'#34d399'}">${t.ok}/${t.total}</div><div class="l">成功/总</div></div>
+      <div class="stat-box"><div class="n" style="color:var(--auditor)">${esc(RUN.verdict)}</div><div class="l">审计结论</div></div>
+    </div>`;
+  }
+  return `
+  <div class="grid2">
+    <div>
+      <div class="panel">
+        <h3><span class="bar"></span>🔁 Handler-led 闭环</h3>
+        ${RUN?`<div class="kv"><div class="k">任务 task</div><div class="v">${esc(RUN.task)}</div></div>
+        <div class="kv"><div class="k">run_id</div><div class="v mono">${esc(RUN.run_id)}</div></div>
+        <div class="kv"><div class="k">工作区</div><div class="v mono" style="font-size:11px">${esc(RUN.dir)}</div></div>`:'<div class="empty">暂无 run</div>'}
+        ${stats}
+        <div class="hint">Handler 掌管全程 → Strategist 规划 → Worker 执行(控制后自动 observe) → Auditor 审计</div>
+      </div>
+      <div class="panel">
+        <h3><span class="bar"></span>四角色职责</h3>
+        ${ORDER.map(k=>{const r=ROLES[k];return `<div class="li" style="border-left:3px solid ${r.color}">
+          <b>${r.icon} ${r.name} · ${r.cn}</b><br><span class="muted">${esc(r.duty_cn)}</span></div>`;}).join('')}
+      </div>
+    </div>
+    <div class="panel">
+      <h3><span class="bar"></span>🧰 共享技能注册表（${SKILLS.length}）</h3>
+      <div class="hint" style="margin-bottom:10px">四个角色共享同一注册表；Strategist 挑选、Worker 执行、Auditor 审计。彩色徽章标注类别。</div>
+      ${sk}
+    </div>
+  </div>`;
+}
+
+function skillCard(s,extraBadge){
+  const args=Object.keys(s.args||{}).map(k=>`<span class="arg">${esc(k)}:${esc(s.args[k])}</span>`).join('');
+  return `<div class="skill">
+    <div class="sn"><span class="sname">${esc(s.name)}</span>
+      <span style="display:flex;gap:5px">
+        ${extraBadge||''}
+        <span class="badge b-${s.group}">${s.group}</span>
+        <span class="badge ${s.is_user?'b-user':'b-base'}">${s.is_user?'learned':'base'}</span>
+      </span></div>
+    <div class="sdesc">${esc(s.description)}</div>
+    ${args?`<div class="sargs">${args}</div>`:''}
+  </div>`;
+}
+
+/* ---------- Agent views ---------- */
+function heroHTML(k){
+  const r=ROLES[k];
+  return `<div class="agent-hero" style="--accent:${r.color}">
+    <div class="h"><span class="ico">${r.icon}</span>
+      <div><div class="nm">${r.name}</div><div class="cn">${r.cn} · ${esc(r.duty)}</div></div></div>
+    <div class="duty">${esc(r.duty_cn)}</div>
+    <div class="contract"><b>契约 contract：</b>${esc(r.contract)}</div>
+  </div>`;
+}
+
+function viewAgent(k){
+  if(!RUN) return heroHTML(k)+'<div class="panel"><div class="empty">暂无 run 数据</div></div>';
+  const r=ROLES[k], color=r.color;
+  return heroHTML(k)+`<div class="grid3">
+    <div class="panel" style="--accent:${color}"><h3><span class="bar"></span>🧰 拥有 / 关联的 Skills</h3>${skillsFor(k)}</div>
+    <div class="panel" style="--accent:${color}"><h3><span class="bar"></span>⚙️ 做了什么</h3>${didFor(k)}</div>
+    <div class="panel" style="--accent:${color}"><h3><span class="bar"></span>🧠 上下文 I/O</h3>${ctxFor(k)}</div>
+  </div>`;
+}
+
+/* 每个角色的 skills 关系 */
+function skillsFor(k){
+  if(k==='handler'){
+    return `<div class="hint" style="margin-bottom:10px">${esc(ROLES.handler.skill_relation)}</div>`+
+      SKILLS.map(s=>skillCard(s)).join('');
+  }
+  if(k==='strategist'){
+    const sel=new Set(RUN.plan.steps.map(s=>s.skill));
+    return `<div class="hint" style="margin-bottom:10px">${esc(ROLES.strategist.skill_relation)}　<b style="color:var(--strategist)">${sel.size}</b> selected / ${SKILLS.length} 候选</div>`+
+      SKILLS.map(s=>skillCard(s, sel.has(s.name)?'<span class="badge b-sel">selected</span>':'')).map((h,i)=>{
+        return sel.has(SKILLS[i].name)?h:h.replace('class="skill"','class="skill faded"');
+      }).join('');
+  }
+  if(k==='worker'){
+    const execCount={};
+    RUN.trace.forEach(t=>execCount[t.skill]=(execCount[t.skill]||0)+1);
+    const used=SKILLS.filter(s=>execCount[s.name]);
+    return `<div class="hint" style="margin-bottom:10px">${esc(ROLES.worker.skill_relation)}</div>`+
+      (used.length?used.map(s=>skillCard(s,`<span class="badge b-exec">×${execCount[s.name]}</span>`)).join('')
+      :'<div class="empty">未执行任何技能</div>');
+  }
+  if(k==='auditor'){
+    const used=new Set(RUN.review.used_skills);
+    const ctrl=new Set(RUN.review.used_control_skills);
+    return `<div class="hint" style="margin-bottom:10px">${esc(ROLES.auditor.skill_relation)}</div>`+
+      (RUN.review.used_skills.length? SKILLS.filter(s=>used.has(s.name)).map(s=>
+        skillCard(s, ctrl.has(s.name)?'<span class="badge b-control">control</span>':'')).join('')
+      :'<div class="empty">无</div>')+
+      `<div class="hint" style="margin-top:10px">仿真泄漏检测：${RUN.review.sim_leak.length?'<span style="color:var(--fail)">'+RUN.review.sim_leak.join(', ')+'</span>':'<span style="color:var(--ok)">clean ✓</span>'}</div>`;
+  }
+}
+
+/* 每个角色做了什么 */
+function didFor(k){
+  if(k==='handler'){
+    const aj=RUN.agent_json.handler;
+    let h=`<div class="li">创建工作区 <span class="mono">${esc(RUN.run_id)}</span>，连接平台并按序移交</div>
+      <div class="li">交接链：Handler → <b style="color:var(--strategist)">Strategist</b> → <b style="color:var(--worker)">Worker</b> → <b style="color:var(--auditor)">Auditor</b></div>
+      <div class="li">最终结果：<b style="color:${RUN.success?'var(--ok)':'var(--warn)'}">${RUN.success?'success ✓':RUN.verdict}</b></div>
+      <div class="kv"><div class="k">产出文件</div><div class="v">${RUN.artifacts.map(a=>`<span class="arg">${esc(a)}</span>`).join(' ')}</div></div>`;
+    if(aj) h+=agentJsonBlock('Handler Codex 输出',aj);
+    else h+=`<div class="hint">本地模式（--local-agents）无 handler_agent.json；接 Codex 时会记录 run_intent / handoff_notes / safety_notes。</div>`;
+    return h;
+  }
+  if(k==='strategist'){
+    const p=RUN.plan;
+    let h=`<div class="kv"><div class="k">目标 goal</div><div class="v">${esc(p.goal)}</div></div>`;
+    h+=`<h3 style="margin-top:14px"><span class="bar" style="background:var(--strategist)"></span>计划步骤 ${p.steps.length}</h3>`;
+    h+=p.steps.map((s,i)=>`<div class="li"><b class="mono">${i+1}. ${esc(s.skill)}</b>
+      ${CONTROL.includes(s.skill)?'<span class="badge b-control">control</span>':''}
+      <div class="mono" style="font-size:11px;color:var(--muted);margin-top:4px">args=${esc(jfmt(s.args))}</div>
+      <div class="muted" style="font-size:12px;margin-top:3px">${esc(s.why)}</div></div>`).join('');
+    h+=listBlock('✅ 成功判据',p.success_criteria);
+    h+=listBlock('⚠️ 风险',p.risks);
+    if(p.assumptions.length) h+=listBlock('假设',p.assumptions);
+    if(p.research_questions.length) h+=listBlock('🔬 研究问题（缺失技能）',p.research_questions,true);
+    return h;
+  }
+  if(k==='worker'){
+    const t=RUN.trace;
+    if(!t.length) return '<div class="empty">worker 未产生轨迹（proceed=false 或空计划）</div>';
+    let h=`<div class="stat-row">
+      <div class="stat-box"><div class="n">${RUN.trace_stats.total}</div><div class="l">执行</div></div>
+      <div class="stat-box"><div class="n" style="color:var(--ok)">${RUN.trace_stats.ok}</div><div class="l">成功</div></div>
+      <div class="stat-box"><div class="n" style="color:${RUN.trace_stats.fail?'#f87171':'#5b6373'}">${RUN.trace_stats.fail}</div><div class="l">失败</div></div>
+    </div><div class="tl">`;
+    h+=t.map(s=>{
+      const roleClass='role-'+(s.role||'worker');
+      return `<div class="tstep ${s.ok?'ok':'bad'}">
+        <div class="idx">${s.index}</div>
+        <div class="body">
+          <div class="sk">${esc(s.skill)} ${s.ok?'✓':'✗'}</div>
+          <div class="why">${esc(s.why)}</div>
+          <div class="meta"><span class="role-tag ${roleClass}">${esc(s.role||'worker')}</span>
+            <span>args=${esc(jfmt(s.args))}</span></div>
+          <div class="res">${esc(jfmt(s.result)).slice(0,600)}</div>
+        </div></div>`;
+    }).join('');
+    h+='</div>';
+    h+=`<div class="hint" style="margin-top:10px">注意 <span class="role-tag role-worker.monitor">worker.monitor</span> 是控制动作后 Worker <b>自动注入的 observe</b>——闭环证据。</div>`;
+    return h;
+  }
+  if(k==='auditor'){
+    const rv=RUN.review;
+    let h=`<div class="kv"><div class="k">判定 verdict</div><div class="v"><span class="verdict-badge v-${rv.verdict}">${esc(rv.verdict)}</span></div></div>
+      <div class="kv"><div class="k">根因 root_cause</div><div class="v">${esc(rv.root_cause)||'<span class="dim">（无）</span>'}</div></div>
+      <div class="kv"><div class="k">下一步 next</div><div class="v">${esc(rv.next_action)||'<span class="dim">（无）</span>'}</div></div>`;
+    h+=`<h3 style="margin-top:14px"><span class="bar" style="background:var(--auditor)"></span>证据 evidence</h3>`;
+    h+=`<div class="kv"><div class="k">用到技能</div><div class="v">${rv.used_skills.map(x=>`<span class="arg">${esc(x)}</span>`).join(' ')||'—'}</div></div>`;
+    h+=`<div class="kv"><div class="k">控制技能</div><div class="v">${rv.used_control_skills.map(x=>`<span class="arg">${esc(x)}</span>`).join(' ')||'<span class="dim">（无）</span>'}</div></div>`;
+    h+=`<div class="kv"><div class="k">仿真泄漏</div><div class="v">${rv.sim_leak.length?'<span style="color:var(--fail)">'+rv.sim_leak.join(', ')+'</span>':'<span style="color:var(--ok)">clean ✓</span>'}</div></div>`;
+    if(rv.research_questions.length) h+=listBlock('🔬 需研究/缺失可学习技能',rv.research_questions,true);
+    return h;
+  }
+}
+
+/* 每个角色的上下文 I/O */
+function ctxFor(k){
+  const io={
+    handler:['task + user_request（用户请求）','编排 notes + 4 份产物 + success'],
+    strategist:['task + 全部已注册技能','plan.md（步骤/判据/风险/研究问题）'],
+    worker:['plan（Strategist 计划）','trace.jsonl + summary.md'],
+    auditor:['plan + trace（执行证据）','review.md + verdict'],
+  }[k];
+  let h=`<div class="kv"><div class="k">⬇ 输入 input</div><div class="v">${esc(io[0])}</div></div>
+    <div class="kv"><div class="k">⬆ 输出 output</div><div class="v">${esc(io[1])}</div></div>`;
+  if(k==='strategist' && RUN.plan.subagent_notes.length)
+    h+=listBlock('子代理笔记 subagent_notes',RUN.plan.subagent_notes);
+  if(k==='worker'){
+    const aj=RUN.agent_json.worker;
+    if(aj){h+=agentJsonBlock('Worker Codex 预审',aj);}
+    else h+=`<div class="hint">本地模式无 worker_agent.json；接 Codex 时含 proceed / execution_notes / concerns。</div>`;
+    if(RUN.summary_md) h+=`<h3 style="margin-top:14px"><span class="bar"></span>summary.md</h3><pre class="raw">${esc(RUN.summary_md)}</pre>`;
+  }
+  if(k==='auditor'){
+    const aj=RUN.agent_json.auditor;
+    if(aj) h+=agentJsonBlock('Auditor Codex 复核',aj);
+  }
+  if(k==='strategist'){
+    const aj=RUN.agent_json.strategist;
+    if(aj) h+=agentJsonBlock('Strategist Codex 计划',aj);
+  }
+  if(k==='handler'){
+    h+=`<div class="hint" style="margin-top:8px">Handler 的 RunResult(notes/success) 打印到 stdout，不落盘；工作区路径见下。</div>
+      <div class="kv"><div class="k">workspace</div><div class="v mono" style="font-size:11px">${esc(RUN.dir)}</div></div>`;
+  }
+  return h;
+}
+
+function listBlock(title,items,warn){
+  if(!items||!items.length) return '';
+  return `<h3 style="margin-top:14px"><span class="bar"></span>${title}</h3>`+
+    items.map(x=>`<div class="li ${warn?'warnrow':''}">${esc(x)}</div>`).join('');
+}
+function agentJsonBlock(title,obj){
+  return `<h3 style="margin-top:14px"><span class="bar"></span>${esc(title)}</h3><pre class="raw">${esc(jfmt(obj))}</pre>`;
+}
+
+boot();
+</script>
+</body>
+</html>

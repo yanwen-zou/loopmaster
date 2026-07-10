@@ -1,0 +1,11 @@
+# Worker Summary: set_lift_height height_mm=120 then set_gripper side=left position=0.5
+
+Executed 6 skill call(s).
+
+## Trace
+- 1. `observe` role=worker ok=True why='establish live robot state before choosing or executing control' result={'ok': True, 'observation': {'images': {}, 'state_keys': ['height.pos', 'left_gripper.pos', 'left_joint_1.pos', 'left_joint_2.pos', 'left_joint_3.pos', 'left_joint_4.pos', 'left_joint_5.pos', 'left_joint_6.pos', 'right_gripper.pos', 'right_joint_1.pos', 'right_joint_2.pos', 'right_joint_3.pos', 'right_joint_4.pos', 'right_joint_5.pos', 'right_joint_6.pos', 'theta.vel', 'x.vel', 'y.vel'], 'timestamp': 1783653226.8182762, 'extras': {'platform': 'dry_run'}}}
+- 2. `set_lift_height` role=worker ok=True why='execute explicitly requested lift height target' result={'ok': True, 'action_sent': {'height.pos': 120.0}}
+- 3. `observe` role=worker.monitor ok=True why='observe live state after set_lift_height' result={'ok': True, 'observation': {'images': {}, 'state_keys': ['height.pos', 'left_gripper.pos', 'left_joint_1.pos', 'left_joint_2.pos', 'left_joint_3.pos', 'left_joint_4.pos', 'left_joint_5.pos', 'left_joint_6.pos', 'right_gripper.pos', 'right_joint_1.pos', 'right_joint_2.pos', 'right_joint_3.pos', 'right_joint_4.pos', 'right_joint_5.pos', 'right_joint_6.pos', 'theta.vel', 'x.vel', 'y.vel'], 'timestamp': 1783653226.8214812, 'extras': {'platform': 'dry_run'}}}
+- 4. `set_gripper` role=worker ok=True why='execute explicitly requested gripper position' result={'ok': True, 'action_sent': {'left_gripper.pos': 0.5}}
+- 5. `observe` role=worker.monitor ok=True why='observe live state after set_gripper' result={'ok': True, 'observation': {'images': {}, 'state_keys': ['height.pos', 'left_gripper.pos', 'left_joint_1.pos', 'left_joint_2.pos', 'left_joint_3.pos', 'left_joint_4.pos', 'left_joint_5.pos', 'left_joint_6.pos', 'right_gripper.pos', 'right_joint_1.pos', 'right_joint_2.pos', 'right_joint_3.pos', 'right_joint_4.pos', 'right_joint_5.pos', 'right_joint_6.pos', 'theta.vel', 'x.vel', 'y.vel'], 'timestamp': 1783653226.8239026, 'extras': {'platform': 'dry_run'}}}
+- 6. `stop_motion` role=worker ok=True why='leave the real platform stationary before returning control' result={'ok': True, 'stopped': True, 'reason': 'handler end-of-run safety stop'}
