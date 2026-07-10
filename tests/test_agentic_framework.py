@@ -44,6 +44,35 @@ class LoopMasterAgenticTests(unittest.TestCase):
         for term in forbidden_terms:
             self.assertNotIn(term, searchable)
 
+    def test_hei_platform_clamps_arm_targets_to_original_limits(self) -> None:
+        platform = HeiRebotLiftPlatform()
+        fake = _FakeHeiRobot()
+        platform._robot = fake
+
+        sent = platform.send_action(
+            {
+                "right_joint_1.pos": -99.0,
+                "right_joint_2.pos": 99.0,
+                "left_joint_1.pos": 99.0,
+                "right_gripper.pos": 99.0,
+                "x.vel": 0.2,
+            }
+        )
+
+        self.assertEqual(sent["right_joint_1.pos"], -0.3)
+        self.assertEqual(sent["right_joint_2.pos"], 0.0)
+        self.assertEqual(sent["left_joint_1.pos"], 0.3)
+        self.assertEqual(sent["right_gripper.pos"], 0.0)
+        self.assertEqual(sent["x.vel"], 0.2)
+        self.assertEqual(fake.actions[-1], sent)
+
+        arm_sent = platform.command_arm("left", {"joint_1": -99.0, "joint_4": 99.0})
+        self.assertEqual(arm_sent["left_joint_1.pos"], -1.5)
+        self.assertEqual(arm_sent["left_joint_4.pos"], 1.57)
+
+        gripper_sent = platform.set_gripper("right", 99.0)
+        self.assertEqual(gripper_sent["right_gripper.pos"], 0.0)
+
     def test_dry_run_handler_executes_four_role_loop(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = Handler(workspace_root=Path(tmp)).run(

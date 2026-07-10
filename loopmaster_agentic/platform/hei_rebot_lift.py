@@ -15,6 +15,26 @@ from loopmaster_agentic.platform.base import RobotPlatform
 
 ARM_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
 ARM_SIDES = ("right", "left")
+ARM_POSITION_LIMITS_RAD = {
+    "right": {
+        "joint_1": (-0.3, 1.5),
+        "joint_2": (-3.14, 0.0),
+        "joint_3": (-3.14, 0.0),
+        "joint_4": (-1.4, 1.57),
+        "joint_5": (-1.57, 1.57),
+        "joint_6": (-3.14, 3.14),
+        "gripper": (-4.5, 0.0),
+    },
+    "left": {
+        "joint_1": (-1.5, 0.3),
+        "joint_2": (-3.14, 0.0),
+        "joint_3": (-3.14, 0.0),
+        "joint_4": (-1.4, 1.57),
+        "joint_5": (-1.57, 1.57),
+        "joint_6": (-3.14, 3.14),
+        "gripper": (-4.5, 0.0),
+    },
+}
 CHASSIS_KEYS = {"x.vel", "y.vel", "theta.vel"}
 LIFT_KEYS = {"height.pos"}
 ARM_KEYS = {f"{side}_{joint}.pos" for side in ARM_SIDES for joint in ARM_JOINTS}
@@ -91,7 +111,7 @@ class HeiRebotLiftPlatform(RobotPlatform):
         return split_hei_observation(raw)
 
     def send_action(self, action: dict[str, float]) -> dict[str, float]:
-        clean = {key: float(value) for key, value in action.items() if key in CONTROL_KEYS}
+        clean = _clamp_action({key: float(value) for key, value in action.items() if key in CONTROL_KEYS})
         if not clean:
             return {}
         sent = self.robot.send_action(clean)
@@ -116,6 +136,8 @@ class HeiRebotLiftPlatform(RobotPlatform):
         return {key: float(self.observe().state.get(key, 0.0)) for key in sorted(CHASSIS_KEYS)}
 
     def command_arm(self, side: str, positions: Mapping[str, float] | Sequence[float]) -> dict[str, float]:
+        side = _normalize_side(side)
+        positions = _clamp_arm_positions(side, positions)
         robot = self.robot
         if hasattr(robot, "arms"):
             sent = robot.arms.command_side(side, positions)
@@ -131,6 +153,10 @@ class HeiRebotLiftPlatform(RobotPlatform):
         right: Mapping[str, float] | Sequence[float] | None = None,
         left: Mapping[str, float] | Sequence[float] | None = None,
     ) -> dict[str, float]:
+        if right is not None:
+            right = _clamp_arm_positions("right", right)
+        if left is not None:
+            left = _clamp_arm_positions("left", left)
         robot = self.robot
         if hasattr(robot, "arms"):
             sent = robot.arms.command(right=right, left=left)
@@ -146,6 +172,8 @@ class HeiRebotLiftPlatform(RobotPlatform):
         return self.send_action(action)
 
     def set_gripper(self, side: str, position: float) -> dict[str, float]:
+        side = _normalize_side(side)
+        position = _clamp_arm_value(side, "gripper", float(position))
         robot = self.robot
         if hasattr(robot, "arms"):
             sent = robot.arms.set_gripper(side, position)
@@ -153,8 +181,7 @@ class HeiRebotLiftPlatform(RobotPlatform):
         if hasattr(robot, "set_gripper"):
             sent = robot.set_gripper(side, position)
             return _numeric_dict(sent)
-        side = _normalize_side(side)
-        return self.send_action({f"{side}_gripper.pos": float(position)})
+        return self.send_action({f"{side}_gripper.pos": position})
 
     def read_arm_positions(self, side: str | None = None) -> dict[str, float]:
         robot = self.robot
@@ -242,18 +269,45 @@ def split_hei_observation(raw: dict[str, Any]) -> Observation:
 
 def _make_arm_action(side: str, positions: Mapping[str, float] | Sequence[float]) -> dict[str, float]:
     side = _normalize_side(side)
+    targets = _clamp_arm_positions(side, positions)
+    return {f"{side}_{joint}.pos": value for joint, value in targets.items()}
+
+
+def _clamp_action(action: Mapping[str, float]) -> dict[str, float]:
+    clean = dict(action)
+    for side in ARM_SIDES:
+        prefix = f"{side}_"
+        for key, value in list(clean.items()):
+            if not key.startswith(prefix) or not key.endswith(".pos"):
+                continue
+            joint = _normalize_joint_key(key, side=side)
+            clean[key] = _clamp_arm_value(side, joint, value)
+    return clean
+
+
+def _clamp_arm_positions(side: str, positions: Mapping[str, float] | Sequence[float]) -> dict[str, float]:
+    side = _normalize_side(side)
     if isinstance(positions, Mapping):
         targets = {
-            _normalize_joint_key(str(joint), side=side): float(value)
+            _normalize_joint_key(str(joint), side=side): _clamp_arm_value(side, str(joint), float(value))
             for joint, value in positions.items()
         }
     elif isinstance(positions, Sequence) and not isinstance(positions, (str, bytes, bytearray)):
         if len(positions) != len(ARM_JOINTS):
             raise ValueError(f"positions sequence must contain {len(ARM_JOINTS)} values")
-        targets = {joint: float(value) for joint, value in zip(ARM_JOINTS, positions, strict=True)}
+        targets = {
+            joint: _clamp_arm_value(side, joint, float(value))
+            for joint, value in zip(ARM_JOINTS, positions, strict=True)
+        }
     else:
         raise TypeError("positions must be a mapping or a sequence of joint targets")
-    return {f"{side}_{joint}.pos": value for joint, value in targets.items()}
+    return targets
+
+
+def _clamp_arm_value(side: str, joint: str, value: float) -> float:
+    joint = _normalize_joint_key(joint, side=side)
+    lower, upper = ARM_POSITION_LIMITS_RAD[side][joint]
+    return min(max(float(value), lower), upper)
 
 
 def _normalize_side(side: str) -> str:
