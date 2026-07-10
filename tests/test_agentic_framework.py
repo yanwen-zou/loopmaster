@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -176,24 +177,28 @@ class LoopMasterAgenticTests(unittest.TestCase):
     def test_chat_cli_once_uses_persistent_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            code = main(
-                [
-                    "chat",
-                    "--dry-run",
-                    "--local-agents",
-                    "--state-dir",
-                    str(root / "state"),
-                    "--workspace-root",
-                    str(root / "workspaces"),
-                    "--session-id",
-                    "test-session",
-                    "--once",
-                    "inspect robot state",
-                ]
-            )
+            with mock.patch("sys.stdout") as stdout:
+                code = main(
+                    [
+                        "chat",
+                        "--dry-run",
+                        "--local-agents",
+                        "--state-dir",
+                        str(root / "state"),
+                        "--workspace-root",
+                        str(root / "workspaces"),
+                        "--session-id",
+                        "test-session",
+                        "--once",
+                        "inspect robot state",
+                    ]
+                )
 
             self.assertEqual(code, 0)
             self.assertTrue((root / "state" / "test-session.jsonl").is_file())
+            printed = "\n".join(str(call.args[0]) for call in stdout.write.call_args_list if call.args)
+            self.assertIn("worker executing plan", printed)
+            self.assertIn("skill `observe` args=", printed)
 
     def test_chat_cli_defaults_to_remote_robot_client(self) -> None:
         captured = {}
@@ -287,6 +292,49 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertNotIn("Tell the user", reply)
         self.assertNotIn("If observe fails", reply)
         self.assertNotIn("还需要你补充", reply)
+        self.assertIn("本轮执行 trace", reply)
+        self.assertIn("`observe` args=", reply)
+
+    def test_handler_reply_includes_failed_skill_args_and_error(self) -> None:
+        result = RunResult(
+            task="oscillate left joint5",
+            workspace="/tmp/workspace",
+            plan=Plan(task="oscillate left joint5", goal="move joint"),
+            trace=[
+                TraceStep(
+                    index=1,
+                    skill="move_arm_joints",
+                    args={"arm": "left", "positions": {"joint_5": 0.5}},
+                    result={"ok": False, "error": "side must be left or right"},
+                    ok=False,
+                    why="test bad schema",
+                ),
+                TraceStep(
+                    index=2,
+                    skill="stop_motion",
+                    args={"reason": "worker abort after failed move_arm_joints"},
+                    result={"ok": True},
+                    ok=True,
+                    role="worker.safety",
+                ),
+            ],
+            review={
+                "verdict": "blocked",
+                "root_cause": "skill `move_arm_joints` failed",
+                "next_action": "repair args",
+                "research_questions": [],
+                "used_skills": ["move_arm_joints", "stop_motion"],
+                "success": False,
+            },
+            success=False,
+        )
+
+        reply = format_handler_reply(result)
+
+        self.assertIn('`move_arm_joints` args={"arm": "left"', reply)
+        self.assertIn("error=side must be left or right", reply)
+        self.assertIn("`stop_motion` args=", reply)
+        self.assertIn("role=worker.safety", reply)
 
     def test_handler_returns_fixable_worker_failure_to_strategist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -367,6 +415,53 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertFalse(results[0].ok)
         self.assertIn("unsupported skill file path", results[0].rejected[0])
+
+    def test_reviewer_can_propose_and_register_new_user_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            old_root = os.environ.get("LOOPMASTER_SKILL_ROOT")
+            os.environ["LOOPMASTER_SKILL_ROOT"] = str(Path(tmp) / "user_skills")
+            try:
+                registry = SkillRegistry(roots=[Path(tmp) / "base"], include_user=True)
+                workspace = _FakeWorkspace(Path(tmp))
+                review = {
+                    "skill_proposals": [
+                        {
+                            "kind": "new_skill",
+                            "skill_name": "toy_new",
+                            "category": "learned/control",
+                            "rationale": "test new skill",
+                            "files": [
+                                {
+                                    "path": "SKILL.md",
+                                    "content": (
+                                        "---\n"
+                                        "name: toy_new\n"
+                                        "description: toy new\n"
+                                        "category: learned/control\n"
+                                        "---\n\n"
+                                        "# Toy New\n"
+                                    ),
+                                },
+                                {
+                                    "path": "policy.py",
+                                    "content": "def dispatch(context, args):\n    return {'ok': True, 'value': 3}\n",
+                                },
+                            ],
+                        }
+                    ]
+                }
+
+                results = apply_review_skill_updates(review, skills=registry, workspace=workspace)
+                refreshed = SkillRegistry(roots=list(registry.roots), include_user=False)
+                result = refreshed.dispatch("toy_new", SkillContext(platform=DryRunPlatform(), workspace=workspace), {})
+            finally:
+                if old_root is None:
+                    os.environ.pop("LOOPMASTER_SKILL_ROOT", None)
+                else:
+                    os.environ["LOOPMASTER_SKILL_ROOT"] = old_root
+
+        self.assertTrue(results[0].ok)
+        self.assertEqual(result["value"], 3)
 
     def test_hei_platform_component_interfaces_use_local_actions(self) -> None:
         robot = _FakeHeiRobot()

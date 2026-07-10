@@ -178,15 +178,62 @@ def format_handler_reply(result: RunResult) -> str:
             lines.append(f"下一步：{next_action}")
     if result.trace:
         lines.append("")
-        lines.append("本轮 skill 调用：")
+        lines.append("本轮执行 trace：")
         for step in result.trace:
             status = "ok" if step.ok else "failed"
-            lines.append(f"- `{step.skill}` {status}")
+            detail = _trace_step_detail(step)
+            lines.append(f"- {detail} -> {status}")
     lines.append("")
     lines.append(f"工作区：`{result.workspace}`")
     if verdict != "done":
         lines.append(f"状态：`{verdict}`")
     return "\n".join(lines)
+
+
+def _trace_step_detail(step: Any) -> str:
+    args = _compact_json(getattr(step, "args", {}))
+    parts = [f"`{step.skill}` args={args}"]
+    role = getattr(step, "role", "")
+    if role and role != "worker":
+        parts.append(f"role={role}")
+    why = str(getattr(step, "why", "") or "").strip()
+    if why:
+        parts.append(f"why={why}")
+    result_summary = _result_summary(getattr(step, "result", {}), ok=bool(getattr(step, "ok", False)))
+    if result_summary:
+        parts.append(result_summary)
+    return " ".join(parts)
+
+
+def _result_summary(result: dict[str, Any], *, ok: bool) -> str:
+    if not isinstance(result, dict):
+        return f"result={_compact_json(result)}"
+    if not ok:
+        return f"error={_short_text(str(result.get('error') or result))}"
+    if "action_sent" in result:
+        return f"action_sent={_compact_json(result['action_sent'])}"
+    observation = result.get("observation")
+    if isinstance(observation, dict):
+        state = observation.get("state")
+        if isinstance(state, dict) and state:
+            return f"state={_compact_json(state)}"
+        state_keys = observation.get("state_keys")
+        if state_keys:
+            return f"state_keys={_compact_json(state_keys)}"
+    if "image" in result:
+        return f"image={_compact_json(result['image'])}"
+    return ""
+
+
+def _compact_json(value: Any, *, limit: int = 360) -> str:
+    text = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return _short_text(text, limit=limit)
+
+
+def _short_text(text: str, *, limit: int = 360) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
 
 
 def _success_summary(result: RunResult) -> str:

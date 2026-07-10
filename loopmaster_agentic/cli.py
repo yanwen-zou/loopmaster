@@ -88,7 +88,7 @@ def _chat_main(argv: list[str]) -> int:
     if args.fresh:
         session.clear()
     if args.once is not None:
-        print(session.reply(args.once))
+        print(session.reply(args.once, progress=lambda event: print(f"  {event}")))
         return 0
     _run_handler_chat_tui(session)
     return 0
