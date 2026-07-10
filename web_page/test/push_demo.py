@@ -45,10 +45,54 @@ SKILLS = [
     ("move_arm_joints", "control", "驱动指定手臂到目标关节角", {"side": "str", "joints": "list"}),
     ("set_gripper", "control", "开合指定夹爪", {"side": "str", "position": "float"}),
     ("stop_motion", "safety", "立即停止一切运动，安全收尾", {"reason": "str"}),
+    ("oscillate_arm_joint", "learned/control", "让指定手臂单关节围绕当前值来回摆动 N 次",
+     {"side": "str", "joint": "int", "amp_rad": "float", "cycles": "int"}),
 ]
 
 # 演示场景（围绕双臂销售机器人）——每个是一次完整运行
 SCENARIOS = [
+    {
+        # ★ 明星场景：真实自进化循环（左手 joint5 摆动）——worker 预检拦截→策略修订→审计出招→重跑
+        "goal": "让左手 joint5 来回摇摆 5 次（±0.5 弧度）",
+        "steps": [
+            ("observe", {"include_images": False, "include_state": True}, "先建立最新机器人状态"),
+            ("oscillate_arm_joint", {"side": "left", "joint": 5, "amp_rad": 0.5, "cycles": 5}, "对 left joint5 做摆动"),
+            ("stop_motion", {"reason": "safety abort"}, "安全收尾"),
+        ],
+        "verdict": "retry",
+        "fail_at": 2,
+        "root_cause": "learned oscillate_arm_joint 的 dispatch 损坏，未能从最新 observe 物化 7 值目标，摆动未执行",
+        "next_action": "修复 oscillate_arm_joint：从最新 observe 构建 [j1..j6,gripper] 7 值向量，仅 joint5 偏移 ±0.5 rad 五个周期后回到起点并 stop_motion，然后重跑",
+        "loop": [
+            {"role": "handler", "type": "route", "title": "Handler 接收请求，分发子代理", "iter": 0},
+            {"role": "handler", "type": "connect", "title": "connecting platform 连接机器人平台", "iter": 0},
+            {"role": "strategist", "type": "plan", "steps": ["observe", "move_arm_joints ×5", "stop_motion"], "iter": 1},
+            {"role": "worker", "type": "gate_block", "iter": 1, "notes": [
+                "计划用旧 trace 的硬编码整臂数组，没有使用最新 observe 结果",
+                "真实硬件上任何位姿变化都可能导致多关节意外运动——具体安全隐患",
+                "应仅将 left joint5 偏移 ±0.5 rad，其余关节/夹爪保持 observed 值"]},
+            {"role": "strategist", "type": "revise", "title": "按安全意见修订", "steps": ["observe", "stop_motion"], "iter": 1},
+            {"role": "worker", "type": "skill", "skill": "observe", "ok": True, "iter": 1},
+            {"role": "worker", "type": "skill", "skill": "stop_motion", "ok": True, "iter": 1},
+            {"role": "auditor", "type": "verdict", "verdict": "retry", "iter": 1,
+             "title": "未执行摆动；fresh observe 已含所需数值，却在观测后中止"},
+            {"role": "auditor", "type": "skill_update", "title": "新增 oscillate_arm_joint 学习技能", "iter": 1},
+            {"role": "strategist", "type": "plan", "steps": ["observe", "oscillate_arm_joint", "stop_motion"], "iter": 2},
+            {"role": "worker", "type": "skill", "skill": "observe", "ok": True, "iter": 2},
+            {"role": "worker", "type": "skill", "skill": "oscillate_arm_joint", "ok": False, "iter": 2,
+             "error": "policy.py must define dispatch(context, args)"},
+            {"role": "worker", "type": "skill", "skill": "stop_motion", "ok": True, "iter": 2},
+            {"role": "auditor", "type": "verdict", "verdict": "retry", "iter": 2,
+             "title": "learned oscillate_arm_joint dispatch 损坏，未能物化 7 值目标"},
+            {"role": "auditor", "type": "skill_update", "title": "修复 dispatch 签名与 schema", "iter": 2},
+            {"role": "strategist", "type": "plan", "steps": ["observe", "stop_motion"], "iter": 3},
+            {"role": "worker", "type": "skill", "skill": "observe", "ok": True, "iter": 3},
+            {"role": "worker", "type": "skill", "skill": "stop_motion", "ok": True, "iter": 3},
+            {"role": "handler", "type": "final", "verdict": "retry", "iter": 3,
+             "title": "The requested left_joint_5 oscillation was not executed（本轮未完成）",
+             "next": "修复 oscillate_arm_joint 后重跑：从最新 observe 构建 7 值向量，仅 joint5 ±0.5 rad 五周期"},
+        ],
+    },
     {
         "goal": "从货篮取出可口可乐并递给顾客",
         "steps": [
@@ -88,6 +132,9 @@ SCENARIOS = [
         "root_cause": "第 2 次抓取时水瓶滑脱，夹持力不足",
         "next_action": "提高夹爪闭合位并重试补货动作",
         "fail_at": 5,
+        "gate": ["计划的夹爪闭合位来自旧参数，未按当前水瓶尺寸校准",
+                 "闭合力不足在真实硬件上会掉落——具体安全/成功率隐患",
+                 "应先 observe 水瓶位姿，再据此设定夹爪闭合位后抓取"],
     },
     {
         "goal": "把现磨热咖啡递给顾客",
@@ -152,6 +199,37 @@ def make_run_id(goal):
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     tail = "".join(random.choice("0123456789abcdef") for _ in range(6))
     return f"{slug(goal)}-{ts}-{tail}"
+
+
+def build_loop_events(scn, trace):
+    """把场景渲染成四角色循环事件流（概述里动态回放）。
+    scn 若带显式 'loop' 则直接用；否则按 plan→(可选 gate→revise)→execute→verdict→final 生成。"""
+    if scn.get("loop"):
+        return scn["loop"]
+    steps = scn["steps"]
+    verdict = scn["verdict"]
+    plan_skills = [s[0] for s in steps]
+    ev = [
+        {"role": "handler", "type": "route", "title": "Handler 接收请求，分发子代理", "iter": 0},
+        {"role": "handler", "type": "connect", "title": "connecting platform 连接机器人平台", "iter": 0},
+    ]
+    if scn.get("gate"):   # 先来一轮被 worker 预检拦截 → 策略修订
+        ev.append({"role": "strategist", "type": "plan", "steps": plan_skills, "iter": 1})
+        ev.append({"role": "worker", "type": "gate_block", "notes": scn["gate"], "iter": 1})
+        ev.append({"role": "strategist", "type": "revise", "title": "按安全意见修订", "steps": plan_skills, "iter": 1})
+    else:
+        ev.append({"role": "strategist", "type": "plan", "steps": plan_skills, "iter": 1})
+    for t in trace:      # worker 逐技能执行（含自动注入的 observe）
+        ev.append({"role": t["role"], "type": "skill", "skill": t["skill"], "ok": t["ok"],
+                   "error": (t["result"].get("reason") if not t["ok"] else None), "iter": 1})
+    ev.append({"role": "auditor", "type": "verdict", "verdict": verdict, "iter": 1,
+               "title": scn.get("root_cause") or "所有动作有据可依，闭环安全收尾"})
+    if verdict != "done":
+        ev.append({"role": "auditor", "type": "skill_update", "title": "补充可学习技能", "iter": 1})
+    ev.append({"role": "handler", "type": "final", "verdict": verdict, "iter": 1,
+               "title": scn.get("root_cause") or "任务完成",
+               "next": scn.get("next_action") or "—"})
+    return ev
 
 
 def build_files(scn):
@@ -252,6 +330,7 @@ def build_files(scn):
         "strategist_agent.json": strategist,
         "worker_agent.json": worker,
         "auditor_agent.json": auditor,
+        "loop_events.json": build_loop_events(scn, trace),
     }
 
 
@@ -272,11 +351,13 @@ def main():
                     help="网站地址，默认线上 https://loopmaster.box2ai.com")
     ap.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", ""),
                     help="写接口令牌（或设环境变量 LOOPMASTER_API_TOKEN）")
-    ap.add_argument("--interval", type=float, default=2.0,
-                    help="每隔几秒推送一次运行，默认 2s（配合服务器 LOOPVIZ_TTL=3 保持内容连续）")
+    ap.add_argument("--interval", type=float, default=9.0,
+                    help="每隔几秒推送一次运行，默认 9s（够看完一轮 Agent Loop 回放；配合服务器 LOOPVIZ_TTL≈20）")
     ap.add_argument("--keep", type=int, default=10, help="页面上最多保留多少条最近运行，默认 10")
     ap.add_argument("--once", type=int, default=0, help="只推 N 份就退出（0=持续推送）")
     ap.add_argument("--clean", action="store_true", help="停止时删除本脚本推送过的所有运行")
+    ap.add_argument("--all", action="store_true",
+                    help="轮播全部演示场景（默认只复现 joint5 那一段自进化循环 log）")
     args = ap.parse_args()
 
     BASE = args.base.rstrip("/")
@@ -294,38 +375,52 @@ def main():
         return
     push_skills()
 
+    # 明星运行：你贴的那段 joint5 自进化循环 log（带显式 loop 事件流）
+    JOINT5 = next((s for s in SCENARIOS if s.get("loop")), SCENARIOS[0])
+
     pushed = []
     n = 0
     try:
-        while True:
-            scn = SCENARIOS[n % len(SCENARIOS)] if n < len(SCENARIOS) else random.choice(SCENARIOS)
-            run_id = make_run_id(scn["goal"])
-            r = api("POST", "/api/loopviz/run", {"id": run_id, "files": build_files(scn)})
-            n += 1
-            if r.get("ok"):
-                pushed.append(run_id)
-                v = r.get("run", {}).get("verdict", "?")
-                print(f"  [{n}] 推送 ✓ verdict={v:<16} {scn['goal']}")
-            else:
-                print(f"  [{n}] 推送 ✗ {r}")
-            # 滚动保留：只留最近 keep 条本脚本推送的运行
-            while len(pushed) > args.keep:
-                old = pushed.pop(0)
-                api("DELETE", "/api/loopviz/run/" + old)
-            if args.once and n >= args.once:
-                print(f"  已推满 {args.once} 份，退出。")
-                break
-            time.sleep(args.interval)
+        if not args.all:
+            # —— 默认：只复现 joint5 这一段 log ——
+            # 用固定 run id 反复推送刷新存活时间，让它一直留在页面上循环回放；
+            # Ctrl+C 停止后不再刷新，约 LOOPVIZ_TTL 秒后页面自动留白。
+            RID = "messi-joint5-loop-demo"
+            files = build_files(JOINT5)
+            print(f"  只推送这一段 log：{JOINT5['goal']}")
+            while True:
+                r = api("POST", "/api/loopviz/run", {"id": RID, "files": files})
+                n += 1
+                print(f"  [{n}] 推送 ✓ 刷新存活" if r.get("ok") else f"  [{n}] 推送 ✗ {r}")
+                if args.once and n >= args.once:
+                    break
+                time.sleep(args.interval)
+        else:
+            # —— --all：轮播全部场景 ——
+            while True:
+                scn = SCENARIOS[n % len(SCENARIOS)] if n < len(SCENARIOS) else random.choice(SCENARIOS)
+                run_id = make_run_id(scn["goal"])
+                r = api("POST", "/api/loopviz/run", {"id": run_id, "files": build_files(scn)})
+                n += 1
+                if r.get("ok"):
+                    pushed.append(run_id)
+                    print(f"  [{n}] 推送 ✓ verdict={r.get('run',{}).get('verdict','?'):<16} {scn['goal']}")
+                else:
+                    print(f"  [{n}] 推送 ✗ {r}")
+                while len(pushed) > args.keep:
+                    api("DELETE", "/api/loopviz/run/" + pushed.pop(0))
+                if args.once and n >= args.once:
+                    break
+                time.sleep(args.interval)
     except KeyboardInterrupt:
         print("\n  已停止推送。")
     finally:
-        if args.clean and pushed:
-            print(f"  清理本次推送的 {len(pushed)} 条运行...")
-            for rid in pushed:
+        if args.clean:
+            for rid in (pushed or ["messi-joint5-loop-demo"]):
                 api("DELETE", "/api/loopviz/run/" + rid)
-            print("  清理完成。")
-        elif pushed:
-            print(f"  页面保留了 {len(pushed)} 条运行（下次加 --clean 可自动清理）。")
+            print("  已清理本次推送的运行。")
+        else:
+            print("  页面保留当前运行，停止刷新后约 LOOPVIZ_TTL 秒自动留白（--clean 可立即清）。")
 
 
 if __name__ == "__main__":

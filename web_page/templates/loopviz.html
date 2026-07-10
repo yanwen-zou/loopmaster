@@ -169,8 +169,11 @@ function renderTabs(){
 function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
 function render(){
   const v=document.getElementById('view');
-  if(IDLE){ v.innerHTML='<div class="panel"><div class="empty">空闲中 · 运行 <code>test/push_demo.py</code> 后这里会实时显示机器人运行（每条约 3 秒）</div></div>'; return; }
+  if(IDLE){ stopLoopReplay(); v.innerHTML='<div class="panel"><div class="empty">空闲中 · 运行 <code>test/push_demo.py</code> 后这里会实时显示机器人运行</div></div>'; return; }
   v.innerHTML = TAB==='overview' ? viewOverview() : viewAgent(TAB);
+  if(TAB==='overview' && RUN && RUN.loop_events && RUN.loop_events.length){
+    startLoopReplay(RUN.loop_events);   // 概述里动态回放四角色循环
+  } else { stopLoopReplay(); }
 }
 
 /* ------------ 总览：图表仪表盘 ------------ */
@@ -207,7 +210,79 @@ function viewOverview(){
     ${skillCompositionCard()}
   </div>`;
 
-  return banner+stat+charts+`<div style="margin-top:16px">${skillChipsCard()}</div>`;
+  return banner+stat+loopReplayCard()+charts+`<div style="margin-top:16px">${skillChipsCard()}</div>`;
+}
+
+/* ------------ Agent Loop 实况回放（数据驱动，来自 RUN.loop_events） ------------ */
+let LOOP_TIMER=null, LOOP_I=0, LOOP_EVENTS=[];
+const LOOP_STEP_MS=950;
+const ROLE_ICON={handler:'🎛️',strategist:'🧭',worker:'🦾','worker.monitor':'🛰️',auditor:'🔍'};
+const ROLE_CN={handler:'Handler 调度',strategist:'Strategist 策略',worker:'Worker 执行','worker.monitor':'Worker 监视',auditor:'Auditor 审计'};
+
+function loopReplayCard(){
+  if(!RUN.loop_events||!RUN.loop_events.length) return '';
+  const ring=['handler','strategist','worker','auditor'].map((k,i)=>
+    `<div class="lr-node" id="lrn-${k}" style="--rc:var(--${k})">
+       <span class="lr-ic">${ROLE_ICON[k]}</span><span class="lr-nm">${ROLE_CN[k].split(' ')[1]}</span></div>`
+     +(i<3?'<span class="lr-arrow">→</span>':'<span class="lr-arrow lr-loop">↺</span>')).join('');
+  return `<div class="panel loop-card">
+    <h3><span class="bar"></span>🔁 Agent Loop 实况回放
+      <span class="lr-iter" id="lrIter">round 0</span></h3>
+    <div class="lr-ring">${ring}</div>
+    <div class="lr-stream" id="loopStream"></div>
+  </div>`;
+}
+function stopLoopReplay(){ if(LOOP_TIMER){clearInterval(LOOP_TIMER);LOOP_TIMER=null;} }
+function startLoopReplay(events){
+  stopLoopReplay(); LOOP_EVENTS=events; LOOP_I=0;
+  const s=document.getElementById('loopStream'); if(!s) return;
+  s.innerHTML=''; setRing(null,0);
+  LOOP_TIMER=setInterval(loopTick, LOOP_STEP_MS); loopTick();
+}
+function setRing(role,iter){
+  ['handler','strategist','worker','auditor'].forEach(k=>{
+    const n=document.getElementById('lrn-'+k); if(n) n.classList.toggle('on', k===role || (role==='worker.monitor'&&k==='worker'));
+  });
+  const it=document.getElementById('lrIter'); if(it) it.textContent='round '+(iter||0);
+}
+function loopTick(){
+  const s=document.getElementById('loopStream'); if(!s){stopLoopReplay();return;}
+  if(LOOP_I<LOOP_EVENTS.length){
+    const e=LOOP_EVENTS[LOOP_I];
+    s.insertAdjacentHTML('beforeend', loopEventHtml(e));
+    s.scrollTop=s.scrollHeight; setRing(e.role, e.iter||0); LOOP_I++;
+  }else{
+    LOOP_I++;
+    if(LOOP_I>LOOP_EVENTS.length+3){ s.innerHTML=''; LOOP_I=0; setRing(null,0); }  // 停留后重播
+  }
+}
+function loopEventHtml(e){
+  const role=e.role||'worker', ic=ROLE_ICON[role]||'•';
+  const head=`<span class="le-role" style="--rc:var(--${role.split('.')[0]})">${ic} ${esc(ROLE_CN[role]||role)}</span>`;
+  let body='', cls='le';
+  if(e.type==='plan'||e.type==='revise'){
+    const steps=(e.steps||[]).map(x=>`<span class="le-chip">${esc(x)}</span>`).join('');
+    body=`<b>${e.type==='revise'?'修订计划':'规划技能调用'}</b>${e.title?' · '+esc(e.title):''}<div class="le-steps">${steps}</div>`;
+  }else if(e.type==='gate_block'){
+    cls='le block';
+    const notes=(e.notes||[]).map(n=>`<li>${esc(n)}</li>`).join('');
+    body=`<b>⛔ Worker 预检拦截 · proceed=false</b>${notes?`<ul class="le-notes">${notes}</ul>`:''}`;
+  }else if(e.type==='skill'){
+    cls='le '+(e.ok?'ok':'bad');
+    body=`调用技能 <b class="mono">${esc(e.skill)}</b> <span class="le-tick">${e.ok?'✓':'✗'}</span>${e.error?`<div class="le-err mono">${esc(e.error)}</div>`:''}`;
+  }else if(e.type==='verdict'){
+    cls='le verdict';
+    body=`<b>审计判定 <span class="verdict-badge v-${esc(e.verdict)}">${esc(e.verdict)}</span></b>${e.title?`<div class="le-root">${esc(e.title)}</div>`:''}`;
+  }else if(e.type==='skill_update'){
+    cls='le upd';
+    body=`<b>🧬 提出技能更新</b> · 应用 gated 技能文件 → 重载注册表并重跑${e.title?' · '+esc(e.title):''}`;
+  }else if(e.type==='final'){
+    cls='le final';
+    body=`<b>🏁 本轮结束 <span class="verdict-badge v-${esc(e.verdict||'unknown')}">${esc(e.verdict||'')}</span></b>${e.title?`<div class="le-root">${esc(e.title)}</div>`:''}${e.next?`<div class="le-next">下一步 · ${esc(e.next)}</div>`:''}`;
+  }else{ // route / connect / observe / stop / note
+    body=`${esc(e.title||e.type||'')}`;
+  }
+  return `<div class="${cls}" style="--rc:var(--${role.split('.')[0]})">${head}<div class="le-body">${body}</div></div>`;
 }
 
 /* ------------ 角色详情：左图表 + 右说明 ------------ */

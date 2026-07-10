@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-叫卖侠 · 双臂销售机器人 自助售卖下单后端
+麦西 Messi · 双臂销售机器人 自助售卖下单后端
 Flask + SQLite，零额外依赖之外只需 flask。
 
 功能：
@@ -227,6 +227,11 @@ def dashboard():
 @app.route("/admin")
 def admin():
     return render_template("admin.html")
+
+
+@app.route("/about")
+def about():
+    return render_template("about.html")
 
 
 # ----------------------------- API -----------------------------
@@ -1000,6 +1005,7 @@ def _lv_parse_run(run_dir):
             "auditor": _lv_load_json(run_dir / "auditor_agent.json"),
         },
         "artifacts": sorted(p.name for p in run_dir.iterdir() if p.is_file()),
+        "loop_events": _lv_load_json(run_dir / "loop_events.json") or [],
     }
 
 
@@ -1044,7 +1050,8 @@ def api_lv_run(run_id):
 # ------------------ LoopViz 写接口：供 agent 框架推送运行/技能 ------------------
 LV_RUN_FILES = {"plan.md", "trace.jsonl", "review.md", "summary.md",
                 "handler_agent.json", "strategist_agent.json",
-                "worker_agent.json", "auditor_agent.json"}
+                "worker_agent.json", "auditor_agent.json",
+                "loop_events.json"}   # 四角色循环事件流（供概述动态回放）
 
 
 def _lv_write_root():
@@ -1079,6 +1086,9 @@ def api_lv_write_run():
     # 保底 plan.md，确保运行能被列表识别
     if not (run_dir / "plan.md").exists():
         (run_dir / "plan.md").write_text(f"# Plan: {run_id}\n", encoding="utf-8")
+    # 刷新目录 mtime：覆盖已存在文件不会更新目录 mtime，而 TTL 用的是目录 mtime，
+    # 故显式 touch，让「固定 id 反复重推保活」在 LOOPVIZ_TTL 下生效。
+    os.utime(run_dir, None)
     return jsonify(ok=True, id=run_id, dir=str(run_dir), written=written,
                    run=_lv_parse_run(run_dir))
 
@@ -1136,7 +1146,7 @@ if __name__ == "__main__":
     if snap:
         print("  启动快照:", os.path.basename(snap))
     print("=" * 48)
-    print("  叫卖侠 · 双臂销售机器人售卖系统")
+    print("  麦西 Messi · 双臂销售机器人售卖系统")
     print("  下单页 : http://127.0.0.1:5000/")
     print("  数据大屏: http://127.0.0.1:5000/dashboard")
     print("  后台管理: http://127.0.0.1:5000/admin")

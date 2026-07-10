@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-<title>叫卖侠 · 自助售卖</title>
+<title>麦西 Messi · 自助售卖</title>
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <div class="topbar">
   <div class="brand">
     <span class="logo">🤖</span>
-    <div>叫卖侠<br><small>双臂销售机器人 · 自助下单</small></div>
+    <div>麦西 <span style="color:var(--orange-2);font-weight:800">Messi</span><br><small>双臂销售机器人 · 自助下单</small></div>
   </div>
   <div class="links">
     <div class="wallet" id="walletBox" style="display:none">
@@ -19,13 +19,14 @@
     <a href="/loopviz" class="agentloop">🔁 Agent Loop</a>
     <a href="/dashboard">数据大屏</a>
     <a href="/admin">后台</a>
+    <a href="/about">关于我们</a>
   </div>
 </div>
 
 <!-- 登录 -->
 <div id="loginView">
   <div class="login-card">
-    <h1>👋 欢迎光临叫卖侠</h1>
+    <h1>👋 欢迎光临麦西 Messi</h1>
     <p>移动升降底盘 + 双臂抓取。<b>点选商品 → 确认 → 机械臂即刻为你抓取</b>，无需购物车。<br>
        老用户输入用户名即可登录（余额保留）；新用户输入名字即注册开户。</p>
     <div class="gift">🎁 新用户注册即送 <b>200 月亮币</b>（1 月亮币 = 1 元人民币）<br>
@@ -83,6 +84,15 @@
 </div>
 
 <div id="toast" class="toast"></div>
+
+<!-- 项目页脚（精简：详细介绍见「关于我们」页） -->
+<footer class="site-footer slim">
+  <div class="foot-wrap foot-slim">
+    <div class="foot-brand">麦西 <span class="mx">Messi</span></div>
+    <span class="team">队伍 · <b>LoopMaster</b> · 可自进化的卖货机器人</span>
+    <a href="/about" class="about-link">关于我们 →</a>
+  </div>
+</footer>
 
 <script>
 let USER = null;      // {user_id, coins}

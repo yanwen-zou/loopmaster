@@ -1,4 +1,4 @@
-# 叫卖侠 · 网站 ↔ Agent 机器人 对接协议
+# 麦西 Messi · 网站 ↔ Agent 机器人 对接协议
 
 本文档定义「下单网站(web_page)」与「loopmaster agent 机器人框架」之间的 HTTP 接口协议。
 网站是服务端(数据源 + 结算方)，agent 框架是客户端(轮询任务 + 驱动机械臂 + 回传结果)。
@@ -128,7 +128,7 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST 🔒 | `/api/loopviz/run` | 推送一次运行 `{id, files:{"plan.md":..,"trace.jsonl":..,"*_agent.json":{..}}}`（dict/list 自动转 JSON） |
+| POST 🔒 | `/api/loopviz/run` | 推送一次运行 `{id, files:{"plan.md":..,"trace.jsonl":..,"loop_events.json":[..],"*_agent.json":{..}}}`（dict/list 自动转 JSON） |
 | DELETE 🔒 | `/api/loopviz/run/<id>` | 删除一次运行 |
 | POST 🔒 | `/api/loopviz/skill` | 注册/更新技能 `{name, category, description, args:{..}, body}`，写入 `LOOPMASTER_SKILL_ROOT`（默认 `~/.loopmaster/skills`） |
 | GET | `/api/loopviz/skills` | 读技能注册表 + 四角色定义 |
@@ -136,6 +136,28 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 | GET | `/api/loopviz/run/<id>` | 读单次运行详情 |
 
 页面 `http://域名/loopviz` 实时展示这些内容。
+
+### 7.1 loop_events.json —— 四角色循环事件流（概述里动态回放）
+
+在 `/api/loopviz/run` 的 `files` 里附带 `loop_events.json`（一个事件数组），
+LoopViz 概述顶部会**逐条动画回放** Handler→Strategist→Worker→Auditor 的自进化循环
+（含 worker 预检拦截、策略修订、审计出招、重跑）。每个事件：
+
+```json
+{ "role": "handler|strategist|worker|worker.monitor|auditor",
+  "type": "route|connect|plan|revise|skill|gate_block|verdict|skill_update|final",
+  "iter": 1,                       // 第几轮循环
+  "title": "一句话说明",            // route/connect/verdict/final 用
+  "steps": ["observe","move_arm_joints ×5","stop_motion"],  // plan/revise 用
+  "notes": ["安全隐患1","安全隐患2"],  // gate_block 用（worker preflight proceed=false 的理由）
+  "skill": "observe", "ok": true, "error": "…",             // skill 用
+  "verdict": "retry", "next": "下一步建议" }                 // verdict/final 用
+```
+
+各 `type` 的语义：`route/connect`=Handler 分发/连接；`plan/revise`=Strategist 规划/修订（带 `steps`）；
+`skill`=Worker 执行一个技能（`ok`/`error`）；`gate_block`=Worker 预检拦截 proceed=false（带 `notes`）；
+`verdict`=Auditor 判定（`verdict`+`title` 根因）；`skill_update`=Auditor 提出并应用可学习技能；
+`final`=Handler 收束（`verdict`+`next`）。
 
 ---
 

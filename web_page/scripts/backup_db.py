@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-叫卖侠数据库备份脚本（可复用）
+麦西 Messi 数据库备份脚本（可复用）
 用法：
     python scripts/backup_db.py            # 备份到 backup/vending_<时间戳>.db
     python scripts/backup_db.py --keep 50  # 保留最近 50 份（默认 30）
