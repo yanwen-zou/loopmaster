@@ -265,6 +265,11 @@ def about():
     return render_template("about.html")
 
 
+@app.route("/research")
+def research():
+    return render_template("research.html")
+
+
 # ----------------------------- API -----------------------------
 @app.route("/api/login", methods=["POST"])
 def api_login():

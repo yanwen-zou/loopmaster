@@ -34,6 +34,15 @@
   }
   @media(max-width:760px){.dev-grid{grid-template-columns:repeat(2,1fr)}}
   @media(max-width:400px){.dev-grid{grid-template-columns:1fr}}
+  /* 开发日志 · 诞生记 */
+  .devlog{display:flex;flex-direction:column;gap:8px;margin-bottom:26px}
+  .dev-item{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);
+    border-radius:12px;padding:11px 14px;box-shadow:0 6px 16px rgba(31,82,230,.05)}
+  .dev-time{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:var(--muted)}
+  .dev-time .mono{font-family:"JetBrains Mono",ui-monospace,monospace}
+  .dev-text{font-size:13.5px;color:var(--text);margin-top:4px;line-height:1.55}
+  .dev-phase{text-align:center;font-weight:800;color:var(--blue);margin:12px 0 4px;font-size:13px;
+    letter-spacing:.3px}
 </style>
 </head>
 <body>
@@ -42,7 +51,7 @@
     <img class="logo" src="/static/logo.png" alt="麦西 Messi">
     <div>麦西 <span style="color:var(--orange-2);font-weight:800">Messi</span> · 关于我们<br><small>队伍 LoopMaster</small></div>
   </div>
-  <div class="links"><a href="/">← 返回首页</a></div>
+  <div class="links"><a href="/research">论文主页</a><a href="/">← 返回首页</a></div>
 </div>
 
 <div class="wrap">
@@ -103,6 +112,9 @@
     </div>
   </div>
 
+  <h3 class="about-h">🛠️ 开发日志 · 麦西 Messi 诞生记（7 月 10 日）</h3>
+  <div class="devlog" id="devStream"></div>
+
   <div class="foot-bar" style="border:none;padding-top:0">
     <span class="team">队伍 · <b>LoopMaster</b></span>
     <span class="hack">🚀 探月计划黑客松 · 48h 产品</span>
@@ -118,5 +130,41 @@
     </div>
   </div>
 </div>
+
+<script>
+const DEV_LOG=[
+  {i:'🔧',t:'15:40',c:'handler',x:'解决网络问题'},
+  {i:'📡',t:'16:00',c:'handler',x:'无线网络连接卡顿，有线也 ping 不到机器人'},
+  {i:'✅',t:'16:30',c:'auditor',x:'完成 keyboard control 底盘移动'},
+  {i:'📦',t:'17:00',c:'handler',x:'外卖买了网口拓展坞，解决了连接问题'},
+  {i:'🧩',t:'18:00',c:'strategist',x:'搭建完成 agent 持久对话窗口，准备 base skills'},
+  {i:'😅',t:'18:00',c:'fail',x:'零食筐打印机被抢了，人类骂了脏话'},
+  {i:'🦾',t:'18:30',c:'worker',x:'测试 agent：让左手 joint5 来回摇摆 5 次，随后 keep running'},
+  {i:'🐛',t:'19:00',c:'handler',x:'debug agent'},
+  {phase:'正式 Loop 开始'},
+  {i:'🔁',t:'23:05',c:'worker',x:'agent loop 自迭代让左手 joint5 摇摆 5 次，reviewer 报错打回 9 次'},
+  {i:'💡',t:'23:15',c:'strategist',x:'人类醒悟：create skill 本身应该是一个 skill'},
+  {i:'🎉',t:'23:39',c:'auditor',x:'机器人动了，而且没写一行 code！'},
+  {i:'🎵',t:'01:30',c:'strategist',x:'《麦西之歌》诞生'},
+  {i:'🤖',t:'02:50',c:'auditor',x:'跑通 grasp 抓取链路'},
+  {i:'🛡️',t:'08:23',c:'fail',x:'agent 撞桌子了，人类添加安全边界 z 大于 -0.15'},
+  {i:'📸',t:'08:50',c:'worker',x:'agent 自己拍了一张照片'},
+  {i:'🧠',t:'09:03',c:'strategist',x:'agent 不愿用 grounded-sam 理解面前有什么——是人类没给它多模态接口'},
+  {i:'🗺️',t:'11:11',c:'auditor',x:'我们给 agent 建好了图，它自己写了 navigation skill'},
+  {i:'⏰',t:'12:04',c:'strategist',x:'必须显式让 agent 意识到「时间」的概念'},
+  {i:'⏱️',t:'12:11',c:'worker',x:'agent 获得了 meta/timer skill'},
+  {i:'⚡',t:'13:45',c:'auditor',x:'agent 学会 shortcut：直接调用 cache 轨迹抓取'},
+];
+const DEV_C={handler:'#2f6bff',strategist:'#a855f7',worker:'#0891b2',auditor:'#16a34a',fail:'#ef4444'};
+const esc=s=>String(s==null?'':s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+function devHtml(e){
+  if(e.phase) return `<div class="dev-phase">— 🚀 ${esc(e.phase)} —</div>`;
+  const c=DEV_C[e.c]||'#2f6bff';
+  return `<div class="dev-item" style="border-left-color:${c}">
+    <span class="dev-time">${e.i} <span class="mono">07-10 ${esc(e.t)}</span></span>
+    <div class="dev-text">${esc(e.x)}</div></div>`;
+}
+document.getElementById('devStream').innerHTML = DEV_LOG.map(devHtml).join('');
+</script>
 </body>
 </html>

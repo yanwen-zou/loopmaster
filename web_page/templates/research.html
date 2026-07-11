@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoopMaster · Registry-Grounded, Audit-Closed Self-Evolving Robot Agents</title>
+<meta name="description" content="LoopMaster：注册表锚定 + 对抗式闭环审计的真机自进化机器人智能体框架。项目主页。">
+<link rel="icon" type="image/png" href="/static/logo.png">
+<style>
+:root{
+  --blue:#2f6bff;--blue-2:#1f52e6;--ink:#0f1e3d;--muted:#5b6b86;--line:#e5eaf3;
+  --bg:#f6f9ff;--panel:#fff;--soft:#eef3ff;
+  --handler:#e8890c;--strategist:#7c3aed;--worker:#0e97b7;--auditor:#0f9d6a;--yellow:#ffd60a;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:"PingFang SC","Microsoft YaHei",system-ui,"Segoe UI",-apple-system,sans-serif;
+  color:var(--ink);line-height:1.7;
+  background:radial-gradient(1200px 600px at 50% -8%,#fff 0%,rgba(255,255,255,0) 60%),linear-gradient(180deg,#eef4ff,#f6f9ff);}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:900px;margin:0 auto;padding:0 22px}
+code,.mono{font-family:"JetBrains Mono","SF Mono",Consolas,monospace}
+
+/* 顶栏 */
+.nav{position:sticky;top:0;z-index:10;display:flex;align-items:center;gap:12px;
+  padding:12px 22px;background:rgba(255,255,255,.8);backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line)}
+.nav img{width:30px;height:30px;object-fit:cover}
+.nav .t{font-weight:800}
+.nav .sp{flex:1}
+.nav a{color:var(--muted);font-weight:600;font-size:14px}
+
+/* Hero */
+.hero{text-align:center;padding:52px 0 30px}
+.hero .badge{display:inline-block;font-size:12px;font-weight:800;letter-spacing:1px;color:var(--blue);
+  background:var(--soft);border:1px solid var(--line);border-radius:20px;padding:5px 14px;margin-bottom:20px}
+.hero h1{font-size:34px;line-height:1.28;font-weight:800;letter-spacing:-.3px;margin-bottom:8px}
+.hero h1 .hl{color:var(--blue)}
+.hero .sub{font-size:17px;color:var(--muted);max-width:720px;margin:0 auto 22px}
+.authors{font-size:15px;margin:16px 0 4px}
+.authors b{font-weight:700}
+.affil{font-size:13px;color:var(--muted);margin-bottom:22px}
+.btns{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.btns a{display:inline-flex;align-items:center;gap:8px;font-weight:700;font-size:14px;
+  padding:10px 18px;border-radius:30px;border:1px solid var(--line);background:#fff;color:var(--ink);
+  box-shadow:0 6px 16px rgba(31,82,230,.07)}
+.btns a.primary{background:linear-gradient(135deg,#4f86ff,var(--blue));color:#fff;border-color:transparent}
+.btns a:hover{text-decoration:none;transform:translateY(-1px)}
+.btns svg{width:16px;height:16px;fill:currentColor}
+
+/* teaser 四角色回路图 */
+.teaser{background:var(--panel);border:1px solid var(--line);border-radius:22px;padding:26px 22px;
+  margin:26px 0 8px;box-shadow:0 16px 40px rgba(31,82,230,.08)}
+.loop{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;justify-content:center}
+.rnode{flex:1;min-width:160px;border:1px solid var(--line);border-top:3px solid var(--c);border-radius:14px;
+  padding:14px;background:#fff}
+.rnode .ic{font-size:22px}
+.rnode .nm{font-weight:800;margin:4px 0 2px}
+.rnode .en{font-size:11px;color:var(--muted);font-weight:700;letter-spacing:.4px;text-transform:uppercase}
+.rnode .du{font-size:12.5px;color:var(--muted);margin-top:6px;line-height:1.5}
+.rnode .art{margin-top:8px;font-size:11px;font-family:"JetBrains Mono",monospace;color:var(--c)}
+.arw{display:flex;align-items:center;justify-content:center;width:30px;color:#9fb0cc;font-size:20px;font-weight:800;flex:0 0 auto}
+.loopback{text-align:center;font-size:12.5px;color:var(--muted);margin-top:14px}
+.loopback b{color:var(--strategist)}
+@media(max-width:720px){.arw{width:100%;height:22px;transform:rotate(90deg)}}
+
+/* 章节 */
+section{padding:30px 0;border-top:1px solid var(--line)}
+h2{font-size:23px;font-weight:800;margin-bottom:14px;display:flex;align-items:center;gap:10px}
+h2::before{content:"";width:6px;height:22px;background:var(--blue);border-radius:3px}
+h3{font-size:16px;font-weight:800;margin:18px 0 6px}
+p{margin-bottom:12px;color:#26324a}
+.lead{font-size:16px}
+ul.clean{list-style:none;display:flex;flex-direction:column;gap:9px;margin:8px 0}
+ul.clean li{position:relative;padding-left:22px;color:#26324a}
+ul.clean li::before{content:"▹";position:absolute;left:2px;color:var(--blue);font-weight:800}
+ul.clean li b{color:var(--ink)}
+.abstract{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:22px 24px}
+
+/* problem cards */
+.pgrid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:6px}
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.pcard .p{font-size:12px;font-weight:800;color:var(--blue);letter-spacing:.4px}
+.pcard h4{font-size:15px;margin:4px 0 6px}
+.pcard p{font-size:13.5px;color:var(--muted);margin:0}
+@media(max-width:720px){.pgrid{grid-template-columns:1fr}}
+
+/* contributions */
+.contrib{display:flex;gap:14px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);
+  border-radius:14px;padding:16px 18px;margin-bottom:12px}
+.contrib .n{flex:0 0 34px;height:34px;border-radius:10px;background:var(--soft);color:var(--blue);
+  display:flex;align-items:center;justify-content:center;font-weight:800}
+.contrib .b{font-size:13.8px;color:#26324a}
+.contrib .b b{color:var(--ink)}
+
+/* table */
+.tblwrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;background:#fff}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:680px}
+th,td{padding:11px 12px;text-align:left;border-bottom:1px solid var(--line);vertical-align:top}
+thead th{background:var(--soft);font-size:12.5px;color:var(--ink);font-weight:800}
+tbody th{font-weight:700;color:var(--ink);background:#fbfcff}
+td.ours,th.ours{background:rgba(47,107,255,.06)}
+th.ours{color:var(--blue)}
+.yes{color:var(--auditor);font-weight:800}
+.no{color:#c0c8d6}
+.note{font-size:12px;color:var(--muted);margin-top:8px}
+
+/* stack chips */
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.chip{font-size:12.5px;font-family:"JetBrains Mono",monospace;background:#fff;border:1px solid var(--line);
+  border-radius:20px;padding:5px 12px;color:var(--ink)}
+.chip.c{border-color:#cfe6ee;color:var(--worker)}
+.chip.p{border-color:#e6d6fb;color:var(--strategist)}
+
+pre.bib{background:#0f1e3d;color:#dce6ff;border-radius:14px;padding:18px 18px;overflow-x:auto;
+  font-size:12.5px;line-height:1.6;font-family:"JetBrains Mono",monospace}
+.foot{text-align:center;color:var(--muted);font-size:13px;padding:34px 0 46px}
+.foot a{margin:0 8px}
+.disc{font-size:12px;color:#8a97ad;background:#fbfcff;border:1px dashed var(--line);border-radius:12px;
+  padding:12px 14px;margin-top:12px}
+</style>
+</head>
+<body>
+
+<div class="nav">
+  <img src="/static/logo.png" alt="麦西 Messi">
+  <span class="t">LoopMaster</span>
+  <span class="sp"></span>
+  <a href="/">← 麦西 Messi 商店</a>
+  <a href="/loopviz">Agent Loop</a>
+</div>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <span class="badge">探月计划黑客松 2026 · 48h · Project Page</span>
+    <h1>LoopMaster: <span class="hl">Registry-Grounded, Audit-Closed</span><br>Self-Evolving Agents for Real-World Robot Manipulation</h1>
+    <div class="sub">一个「小老板都能教会」、能在<b>真实双臂机器人</b>上安全自我进化的智能体框架。
+      以<b>技能注册表锚定规划</b> + <b>对抗式闭环审计</b>，把「自进化 Agent」从仿真基准带到可信的真机货架前。</div>
+
+    <div class="authors">
+      <b>黑狗木</b><sup>1</sup> · <b>交大博士生</b><sup>2</sup> · <b>盒子桥</b><sup>3</sup> · <b>问界设计师</b><sup>4</sup>
+    </div>
+    <div class="affil">Team <b>LoopMaster</b> &nbsp;·&nbsp; <sup>1</sup>本体/下位机 &nbsp; <sup>2</sup>算法/Agent（上海交大） &nbsp; <sup>3</sup>交互/可视化 &nbsp; <sup>4</sup>产品/系统</div>
+
+    <div class="btns">
+      <a class="primary" href="#method"><svg viewBox="0 0 24 24"><path d="M4 5h16v2H4zm0 6h16v2H4zm0 6h10v2H4z"/></svg>Method</a>
+      <a href="https://github.com/yanwen-zou/loopmaster" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.2-1.3-5.2-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 5 18 5.3 18 5.3c.6 1.5.2 2.7.1 3 .8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5z"/></svg>Code · LoopMaster</a>
+      <a href="https://github.com/lipengdong/hei-rebot-lift" target="_blank" rel="noopener"><svg viewBox="0 0 24 24"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.6v-2c-3.2.7-3.9-1.5-3.9-1.5-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.7 1.3 3.4 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.2-1.3-5.2-5.7 0-1.3.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3 0 0 1-.3 3.2 1.2a11 11 0 0 1 5.8 0C17 5 18 5.3 18 5.3c.6 1.5.2 2.7.1 3 .8.8 1.2 1.8 1.2 3.1 0 4.4-2.7 5.4-5.2 5.7.4.4.8 1.1.8 2.2v3.3c0 .4.2.7.8.6A11.5 11.5 0 0 0 23.5 12C23.5 5.7 18.3.5 12 .5z"/></svg>Hardware · Hei-Rebot-Lift</a>
+      <a href="/loopviz">🔁 Live Agent Loop</a>
+    </div>
+  </div>
+
+  <!-- TEASER：四角色回路 -->
+  <div class="teaser">
+    <div class="loop">
+      <div class="rnode" style="--c:var(--handler)">
+        <div class="ic">🎛️</div><div class="nm">Handler</div><div class="en">Orchestrator</div>
+        <div class="du">掌管整轮运行、工作区与机器人连接，按序移交并施加重试/技能更新。</div>
+      </div>
+      <div class="arw">→</div>
+      <div class="rnode" style="--c:var(--strategist)">
+        <div class="ic">🧭</div><div class="nm">Strategist</div><div class="en">Planner</div>
+        <div class="du">仅从注册表挑选<b>已声明</b>的技能，产出可执行计划。</div>
+        <div class="art">→ plan.md</div>
+      </div>
+      <div class="arw">→</div>
+      <div class="rnode" style="--c:var(--worker)">
+        <div class="ic">🦾</div><div class="nm">Worker</div><div class="en">Executor</div>
+        <div class="du">真机执行；每个控制动作后自动 observe，失败即 stop_motion。</div>
+        <div class="art">→ trace.jsonl</div>
+      </div>
+      <div class="arw">→</div>
+      <div class="rnode" style="--c:var(--auditor)">
+        <div class="ic">🔍</div><div class="nm">Auditor</div><div class="en">Adversarial Judge</div>
+        <div class="du">独立复核证据，绝不凭 action_sent 判成功；检测仿真泄漏。</div>
+        <div class="art">→ review.md</div>
+      </div>
+    </div>
+    <div class="loopback">↺ 判定 <b>retry / research_needed</b> → 复规划或<b>门控自创作新技能</b> → 热重载注册表 → 重跑闭环</div>
+  </div>
+
+  <!-- ABSTRACT -->
+  <section id="abstract">
+    <h2>Abstract</h2>
+    <div class="abstract">
+      <p class="lead">自进化智能体正快速逼近「让机器人自己学会新技能」的目标，但绝大多数系统的证据来自<b>仿真基准</b>，
+        并在自由生成代码 / 无约束技能库上自我改写——这带来三类被学术界持续关注的隐患：
+        <b>工具幻觉</b>（planner 臆造不存在的能力）、<b>仿真证据泄漏 / 成功作弊</b>（用仿真里的 <code>check_task_success</code> 冒充真机成功），
+        以及<b>技能库漂移</b>（self-evolving skill library 静默腐化）。</p>
+      <p>我们提出 <b>LoopMaster</b>：一个面向<b>真实双臂移动机器人</b>（开源本体 Hei-Rebot-Lift）的自进化智能体框架。
+        它把一次运行拆成四个文件化契约的角色——<b>Handler / Strategist / Worker / Auditor</b>——并引入两条核心机制：
+        <b>(1) 注册表锚定规划</b>，Strategist 只能选用 <code>SKILL.md</code> 里声明过的技能，从结构上杜绝工具幻觉；
+        <b>(2) 对抗式闭环审计</b>，Worker 在每个控制动作后强制注入 <code>observe</code> 采证，独立 Auditor 绝不凭指令回执判成功、
+        并主动检测「仿真泄漏」——证据来自仿真即判 <span class="mono">blocked</span>。
+        当发现缺失能力（<span class="mono">research_needed</span>）时，Auditor 以轨迹为证据<b>提案新技能</b>，
+        经语法/导入/签名<b>门控校验+失败回滚</b>后热重载注册表并重跑——实现<b>可审计、可回滚的安全自进化</b>。
+        一名普通「小老板」即可用人类可读的 markdown+python 教会它新技能。</p>
+    </div>
+  </section>
+
+  <!-- PROBLEMS -->
+  <section id="problems">
+    <h2>我们在学术上解决了什么</h2>
+    <p>把「自进化 Agent」从仿真榜单带到真机货架，本质要回答的是一组<b>可信性</b>问题：</p>
+    <div class="pgrid">
+      <div class="pcard"><div class="p">P1 · GROUNDING</div><h4>工具/技能幻觉</h4>
+        <p>LLM planner 常臆造不存在的 API/技能。→ <b>注册表锚定规划</b>：计划只能引用已声明技能，执行前做集合校验。</p></div>
+      <div class="pcard"><div class="p">P2 · EVIDENCE</div><h4>仿真泄漏 / 成功作弊</h4>
+        <p>自进化系统易用仿真成功冒充真机成功。→ <b>observe-after-control 强制采证 + Auditor 仿真泄漏检测</b>，证据来自 sim 即 blocked。</p></div>
+      <div class="pcard"><div class="p">P3 · LIFECYCLE</div><h4>技能库漂移与不安全自改</h4>
+        <p>skill library 会静默腐化、自改写可能损坏既有能力。→ <b>门控自创作</b>：语法/导入/签名校验 + 失败自动回滚 + 独立审计。</p></div>
+      <div class="pcard"><div class="p">P4 · TRUST</div><h4>Agent 回路不可复现/不可审计</h4>
+        <p>单体 LLM 回路是黑盒。→ <b>四角色文件化契约</b>（plan/trace/review）+ LoopViz 全程可视化，任一步可回放。</p></div>
+      <div class="pcard"><div class="p">P5 · SAFETY</div><h4>自进化中的真机安全</h4>
+        <p>自主改写时的真机风险。→ <b>安全内建</b>：控制预检可拒绝、自动 stop_motion、末端 z 与底盘速度/时序硬边界。</p></div>
+      <div class="pcard"><div class="p">P6 · TEACHABILITY</div><h4>教新能力的成本</h4>
+        <p>加新技能通常需专家。→ 技能=<b>人类可读 markdown+python</b>，小老板可教、可批准；也可由 agent 自证自写。</p></div>
+    </div>
+  </section>
+
+  <!-- METHOD -->
+  <section id="method">
+    <h2>Method · 四角色闭环 + 技能注册表</h2>
+    <h3>① 四角色文件化契约（reproducible role graph）</h3>
+    <p>一次运行被拆成四个各有明确契约、以文件交接的子代理：Handler 掌管运行与机器人连接；Strategist 产出
+      <code>plan.md</code>；Worker 执行并写 <code>trace.jsonl</code>；Auditor 复核并写 <code>review.md</code>，判定
+      <span class="mono">done / retry / blocked / research_needed</span>。全程产物落盘，天然可复现、可审计（即 LoopViz 所可视化的对象）。</p>
+
+    <h3>② 注册表锚定规划（registry-grounded planning）</h3>
+    <p>每个技能是一个带 <code>SKILL.md</code> 声明（name / args schema / 描述）+ <code>policy.py</code>（<code>dispatch()</code>）的一等对象。
+      Strategist 只在注册表的技能集合内选择与编排，执行前用 <code>available = {s.name for s in skills.list()}</code> 校验——
+      从结构上消除「自由生成代码」范式里的工具幻觉与仿真-only 谓词漂移。</p>
+
+    <h3>③ 对抗式闭环审计（adversarial, evidence-first audit）</h3>
+    <p>Worker 在每个<b>控制</b>动作后自动注入 <code>observe</code> 采集前后状态；Auditor 独立复核，契约明确
+      「<i>never mark done from action_sent alone</i>」，要求看到状态确实按预期变化，并用采样趋势/区间/稳定窗口而非单点相等来判断。
+      同时检测 <code>{robotwin, sim, simulation, check_task_success}</code> 等<b>仿真泄漏</b>词——证据来自仿真即判 <span class="mono">blocked</span>。</p>
+
+    <h3>④ 门控自创作（gated self-authorship：「create_skill 本身是一个 skill」）</h3>
+    <p>当 Auditor 判 <span class="mono">research_needed</span>，它以轨迹为证据提出完整的 <code>SKILL.md</code>+<code>policy.py</code> 提案；
+      系统 <code>py_compile</code> 语法检查 → 动态导入 → 校验 <code>dispatch(context,args)</code> 签名 → 任一失败<b>回滚</b>到备份；
+      通过后热重载注册表并重跑闭环。新技能自此成为「已注册、被审计」的一等能力。这条回路让系统在<b>同一次会话内</b>发现缺陷→自写修复→复用。</p>
+
+    <h3>⑤ 安全内建 & 感知/操作栈</h3>
+    <p>Worker 预检可对不安全动作返回 <code>proceed=false</code>；失败后自动 <code>stop_motion</code>；末端 <code>z≥0.06m</code>、底盘速度/时序（duration_s / settle_s / velocity_limit）等硬边界写进技能契约。</p>
+    <div class="chips">
+      <span class="chip p">observe</span><span class="chip p">capture_image · D435</span><span class="chip p">grounded_sam2</span>
+      <span class="chip p">detect_grasps · AnyGrasp</span>
+      <span class="chip c">move_arm_ee · IK</span><span class="chip c">set_gripper</span><span class="chip c">set_base_velocity</span>
+      <span class="chip c">set_lift_height</span><span class="chip c">navigation · Nav2</span><span class="chip c">stop_motion</span>
+      <span class="chip">meta/create_skill</span><span class="chip">meta/timer</span>
+    </div>
+  </section>
+
+  <!-- CONTRIBUTIONS -->
+  <section id="contrib">
+    <h2>Key Contributions</h2>
+    <div class="contrib"><div class="n">1</div><div class="b"><b>注册表锚定规划</b>：以声明式技能契约约束 LLM 规划，从结构上消除工具幻觉与仿真-only 谓词漂移。</div></div>
+    <div class="contrib"><div class="n">2</div><div class="b"><b>对抗式闭环审计 + 仿真泄漏检测</b>：observe-after-control 强制采证，独立 Auditor 只认真机证据，直击自进化里的「成功作弊 / sim leak」。</div></div>
+    <div class="contrib"><div class="n">3</div><div class="b"><b>门控、可回滚的自创作技能</b>：Auditor 提案 → 校验 → 回滚保护 → 热重载重跑，缓解 self-evolving skill library 的「library drift」与不安全自改。</div></div>
+    <div class="contrib"><div class="n">4</div><div class="b"><b>文件化四角色契约 + LoopViz 可视化</b>：把 agent 回路做成可复现、可回放、可审计的系统，而非黑盒单体循环。</div></div>
+    <div class="contrib"><div class="n">5</div><div class="b"><b>真机优先 + 小老板可教</b>：全流程跑在开源双臂移动本体 Hei-Rebot-Lift 上；技能是人类可读的 markdown+python，非专家亦可教学与批准。</div></div>
+  </section>
+
+  <!-- COMPARISON -->
+  <section id="compare">
+    <h2>相比 ASPIRE / Maestro / 自进化技能库范式</h2>
+    <div class="tblwrap">
+    <table>
+      <thead><tr>
+        <th>维度</th>
+        <th>自进化技能库范式<br><span style="font-weight:400;color:var(--muted)">Voyager · ExpeL · EmbodiSkill（“Enpire”指代）</span></th>
+        <th>ASPIRE<br><span style="font-weight:400;color:var(--muted)">NVIDIA GEAR</span></th>
+        <th>Maestro</th>
+        <th class="ours">LoopMaster<br><span style="font-weight:400">(ours)</span></th>
+      </tr></thead>
+      <tbody>
+        <tr><th>主战场</th><td>游戏 / 软件 / 仿真</td><td>仿真基准（LIBERO-Pro·Robosuite·BEHAVIOR）+ sim2real</td><td>仿真 + 真机，编排预训练 VLA</td><td class="ours"><b>真机优先</b>：双臂移动本体货架前实跑</td></tr>
+        <tr><th>规划基元</th><td>自由生成代码/技能</td><td>code-as-policy 程序进化搜索</td><td>VLM 编排 VLA「肌肉」模块</td><td class="ours"><b>注册表锚定</b>：只选 SKILL.md 已声明技能</td></tr>
+        <tr><th>成功判定</th><td>环境 reward/success</td><td>执行反馈 + 程序自调试</td><td>少量真机试验反馈</td><td class="ours"><b>对抗式审计</b>：绝不信 action_sent，强制 observe 证据</td></tr>
+        <tr><th>仿真泄漏防护</th><td class="no">—</td><td class="no">—</td><td class="no">—</td><td class="ours"><span class="yes">✓</span> sim-leak 检测→判 blocked</td></tr>
+        <tr><th>技能自创作</th><td>追加成功轨迹（易 library drift）</td><td>进化搜索保存成功程序</td><td>从少量试验进化代码</td><td class="ours"><b>门控自创作</b>：校验+失败回滚+热重载</td></tr>
+        <tr><th>真机安全</th><td class="no">—</td><td>侧重仿真</td><td>部分</td><td class="ours"><span class="yes">✓</span> 预检可拒绝 + 自动 stop_motion + 硬边界</td></tr>
+        <tr><th>可复现/可审计</th><td>黑盒</td><td>轨迹记录</td><td>—</td><td class="ours"><b>文件化四角色</b> + LoopViz 回放</td></tr>
+        <tr><th>教学成本</th><td>需专家</td><td>自动为主</td><td>自动为主</td><td class="ours"><b>小老板可教</b>：人类可读技能，可批准/注入</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <p class="note">定位小结：ASPIRE 用进化式程序搜索在<b>仿真里最大化能力覆盖</b>；Maestro 用 VLM 编排预训练 <b>VLA 模块</b>做零样本泛化；
+      自进化技能库范式（Voyager/ExpeL 系）以「成功即入库」增长能力。<b>LoopMaster 的差异化在于“可信的真机自进化”</b>——
+      用注册表锚定 + 对抗式闭环审计 + 门控自创作，把安全、证据与可审计性放在能力增长之前。</p>
+    <div class="disc">说明：对 ASPIRE / Maestro / Voyager·ExpeL·EmbodiSkill 的描述来自其公开项目页与论文；表格用于定位差异，非逐指标基准对比。
+      “Enpire” 未见对应公开框架，此处以其所指的「自进化技能库」谱系代表之。</div>
+  </section>
+
+  <!-- REAL ROBOT -->
+  <section id="story">
+    <h2>Real-Robot：48 小时里发生了什么</h2>
+    <ul class="clean">
+      <li>顿悟：<b>「create_skill 本身应该是一个 skill」</b>——自进化回路由此闭合。</li>
+      <li><b>机器人动了，而且没写一行 code</b>：由 agent 自主规划-执行-审计驱动。</li>
+      <li>撞桌子后，人类只加了一条硬边界 <code>z &gt; -0.15</code>；agent 随后<b>自己拍照、自己写了 navigation skill</b>。</li>
+      <li>为让它<b>意识到「时间」</b>，agent 获得 <code>meta/timer</code> skill；随后学会 shortcut：直接调用 cache 轨迹抓取。</li>
+    </ul>
+    <p>完整时间线在空闲时会于 <a href="/loopviz">🔁 Agent Loop</a> 页自动回放。</p>
+  </section>
+
+  <!-- BIBTEX -->
+  <section id="cite">
+    <h2>BibTeX</h2>
+    <pre class="bib">@misc{loopmaster2026,
+  title  = {LoopMaster: Registry-Grounded, Audit-Closed Self-Evolving
+            Agents for Real-World Robot Manipulation},
+  author = {Team LoopMaster},
+  note   = {Project “麦西 Messi” · 探月计划黑客松 2026},
+  year   = {2026},
+  url    = {https://loopmaster.box2ai.com/research},
+}</pre>
+  </section>
+
+  <div class="foot">
+    队伍 · <b>LoopMaster</b> &nbsp;·&nbsp; 🚀 探月计划黑客松 · 48h 产品
+    <div style="margin-top:8px">
+      <a href="/">麦西 Messi 商店</a>·
+      <a href="/loopviz">Agent Loop</a>·
+      <a href="https://github.com/yanwen-zou/loopmaster" target="_blank" rel="noopener">LoopMaster</a>·
+      <a href="https://github.com/lipengdong/hei-rebot-lift" target="_blank" rel="noopener">Hei-Rebot-Lift</a>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
