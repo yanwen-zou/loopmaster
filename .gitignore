@@ -13,3 +13,8 @@ _viz_runs/
 _grasp_runs/
 _runs/
 artifacts/
+
+# web_page 运行时产物（不入库）
+web_page/vending.db
+web_page/backup/
+web_page_deploy.zip
