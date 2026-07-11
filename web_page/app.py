@@ -315,6 +315,13 @@ def api_order():
 
     # ---- 真实机器人模式：建 pending 订单 + task，交给 agent 轮询执行，report 时结算 ----
     if not ARM_SIMULATE:
+        # 现场只有一台机器人：已有未完成任务(待执行/执行中)时，不允许新用户下单
+        busy = db.execute(
+            "SELECT id FROM tasks WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+        ).fetchone()
+        if busy:
+            return jsonify(ok=False, busy=True,
+                           msg="机器人正在为其他顾客服务，请稍候再下单 🤖"), 409
         for li in line_items:
             li["delivered"] = 0
         instruction = "；".join(
