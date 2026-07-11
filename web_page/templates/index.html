@@ -16,10 +16,12 @@
     <div class="wallet" id="walletBox" style="display:none">
       <span id="uidLabel">—</span>｜<span class="coin">☾ <span id="coinLabel">0</span></span>
     </div>
-    <a href="/loopviz" class="agentloop">🔁 Agent Loop</a>
-    <a href="/dashboard">数据大屏</a>
-    <a href="/admin">后台</a>
-    <a href="/about">关于我们</a>
+    <div id="navLinks" style="display:none;align-items:center;gap:14px">
+      <a href="/loopviz" class="agentloop">🔁 Agent Loop</a>
+      <a href="/dashboard">数据大屏</a>
+      <a href="/admin">后台</a>
+      <a href="/about">关于我们</a>
+    </div>
   </div>
 </div>
 
@@ -155,6 +157,7 @@ async function login(){
   document.getElementById('loginView').classList.add('hidden');
   document.getElementById('shopView').classList.remove('hidden');
   document.getElementById('walletBox').style.display = 'flex';
+  document.getElementById('navLinks').style.display = 'flex';
   document.getElementById('uidLabel').textContent = d.user_id;
   updateWallet();
   if(d.is_new) toast('🎁 欢迎新用户！已到账 '+d.gift+' 月亮币', 'ok');
@@ -279,6 +282,7 @@ function resetToLogin(){
   document.getElementById('loginView').classList.remove('hidden');
   document.getElementById('shopView').classList.add('hidden');
   document.getElementById('walletBox').style.display = 'none';
+  document.getElementById('navLinks').style.display = 'none';
   const inp = document.getElementById('uidInput'); if(inp) inp.value = '';
 }
 // 手机返回手势 / 浏览器前进后退会从 bfcache 恢复旧 DOM（停留在选购页）；
