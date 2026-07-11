@@ -31,7 +31,7 @@ class Worker:
         if agent_client is not None:
             worker_agent = agent_client.run_json(
                 role=self.role_name,
-                prompt=_worker_prompt(plan=plan, workspace=workspace),
+                prompt=_worker_prompt(plan=plan, workspace=workspace, skills=skills.list()),
                 schema=_WORKER_SCHEMA,
             )
             (workspace.root / "worker_agent.json").write_text(
@@ -262,6 +262,7 @@ _TEMPLATE_PATTERN = re.compile(r"\$\{([^}]+)\}")
 
 def _is_control_skill(name: str) -> bool:
     return name in {
+        "init_arms",
         "move_arm_ee",
         "move_arm_joints",
         "set_gripper",
@@ -287,7 +288,8 @@ _WORKER_SCHEMA: dict[str, Any] = {
 }
 
 
-def _worker_prompt(*, plan: Plan, workspace: Workspace) -> str:
+def _worker_prompt(*, plan: Plan, workspace: Workspace, skills: list[Any] | None = None) -> str:
+    skills = skills or []
     payload = {
         "role": "worker",
         "contract": (
@@ -296,11 +298,26 @@ def _worker_prompt(*, plan: Plan, workspace: Workspace) -> str:
             "not add unregistered skills. A plan step named create_skill is a registered meta skill "
             "when it appears in the provided plan; do not reject it merely because it authors a "
             "learned skill, but do reject malformed create_skill args or unsafe immediate motion. "
+            "A plan step named init_arms is the registered arm initialization skill: it loads the "
+            "repository init config, validates joint limits, commands both arms, and verifies state "
+            "feedback. Do not reject init_arms merely because it moves both arms to a fixed pose; "
+            "do reject hand-inlined fixed arm initialization that bypasses registered skills. "
             "For real robot control, action_sent only means the command was accepted. Require "
             "periodic or post-action observe feedback and compare actual state with expected "
             "motion; if targets are issued too quickly to move visibly or feedback does not "
             "change as expected, return proceed=false or let the trace show the mismatch rather "
-            "than treating the run as physically complete. "
+            "than treating the run as physically complete. For an explicit low-level operator "
+            "request to move the base for a bounded short duration, allow a conservative "
+            "set_base_velocity step when it has duration_s<=5.0, abs(x)<=0.1, abs(y)<=0.1, "
+            "abs(theta)<=0.2, plus stop_motion and post-motion observe/settling evidence. "
+            "Do not block such a plan solely because there is no rear camera, navigation status, "
+            "or registered path-clearance skill; missing clearance is a risk/note unless a "
+            "registered safety or clearance skill has explicitly returned unsafe/path_clearance=false/abort. "
+            "Do block unbounded, high-speed, no-stop, or explicitly unsafe base motion. Every control "
+            "step should have timing semantics appropriate to the actuator: duration_s for base velocity, "
+            "settle_s for gripper/lift/stop feedback, and velocity_limit_rad_s plus observe/settling for "
+            "arm motion. Treat repeated control commands with no duration or settle window as a plan "
+            "defect unless they are explicit zero-duration dry checks. "
             "Return proceed=false only for a concrete safety or registry issue."
         ),
         "workspace": str(workspace.root),
@@ -311,12 +328,29 @@ def _worker_prompt(*, plan: Plan, workspace: Workspace) -> str:
             "research_questions": list(plan.research_questions),
             "risks": list(plan.risks),
         },
+        "available_skills": [
+            {
+                "name": skill.name,
+                "category": skill.category,
+                "description": skill.description,
+                "args": skill.frontmatter.get("args", {}),
+                "usage_markdown": _skill_usage_markdown(skill),
+            }
+            for skill in skills
+        ],
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
 
 def _call_to_dict(step: SkillCall) -> dict[str, Any]:
     return {"name": step.name, "args": step.args, "why": step.why}
+
+
+def _skill_usage_markdown(skill: Any, *, limit: int = 1200) -> str:
+    body = str(getattr(skill, "body", "") or "").strip()
+    if len(body) <= limit:
+        return body
+    return body[: limit - 3].rstrip() + "..."
 
 
 def _summary_markdown(

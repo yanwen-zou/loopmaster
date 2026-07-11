@@ -12,7 +12,7 @@ from loopmaster_agentic.agents.strategist import Strategist
 from loopmaster_agentic.agents.worker import Worker
 from loopmaster_agentic.agents.workspace import new_workspace
 from loopmaster_agentic.core.result import RunResult
-from loopmaster_agentic.core.types import Plan
+from loopmaster_agentic.core.types import Plan, TraceStep
 from loopmaster_agentic.platform.base import RobotPlatform
 from loopmaster_agentic.skills.registry import SkillRegistry, user_skill_root
 
@@ -90,16 +90,23 @@ class Handler:
         platform.connect()
         try:
             seen_skill_updates: set[str] = set()
+            seen_auditor_retries: set[str] = set()
+            auditor_retry_count = 0
+            plan_override: Plan | None = None
             while True:
-                if progress is not None:
-                    progress("strategist planning skill calls")
-                plan = self.strategist.plan(
-                    task=task,
-                    user_request=user_request,
-                    workspace=workspace,
-                    skills=self.skills,
-                    agent_client=self.agent_client,
-                )
+                if plan_override is None:
+                    if progress is not None:
+                        progress("strategist planning skill calls")
+                    plan = self.strategist.plan(
+                        task=task,
+                        user_request=user_request,
+                        workspace=workspace,
+                        skills=self.skills,
+                        agent_client=self.agent_client,
+                    )
+                else:
+                    plan = plan_override
+                    plan_override = None
                 notes.extend(note for note in plan.subagent_notes if "Codex profile" in note)
                 if progress is not None:
                     progress(f"strategist plan: {_format_plan_steps(plan)}")
@@ -185,6 +192,103 @@ class Handler:
                             roots = _roots_with_user_skill_root(self.skills)
                             self.skills = SkillRegistry(roots=roots, include_user=False)
                             continue
+                    retry_signature = _auditor_retry_signature(review, agent_client=self.agent_client)
+                    if retry_signature:
+                        if retry_signature in seen_auditor_retries:
+                            notes.append("auditor retry repeated after strategist loop")
+                            if progress is not None:
+                                progress("loop stopped: repeated auditor retry")
+                            escalated = _escalate_auditor_retry(
+                                agent_client=self.agent_client,
+                                task=task,
+                                user_request=user_request,
+                                workspace=str(workspace.root),
+                                skills=self.skills,
+                                plan=plan,
+                                trace=trace,
+                                review=review,
+                                notes=notes,
+                                reason="repeated auditor retry after strategist loop",
+                                escalation_index=auditor_retry_count + 1,
+                            )
+                            if escalated is not None:
+                                review = _merge_escalation_review(review, escalated)
+                                notes.extend(_agent_notes("auditor_escalation", escalated))
+                                if _escalation_wants_skill_retry(escalated):
+                                    if progress is not None:
+                                        progress("auditor escalation proposed skill update; applying gated skill files")
+                                    update_results = apply_review_skill_updates(
+                                        escalated, skills=self.skills, workspace=workspace
+                                    )
+                                    notes.extend(
+                                        f"escalation skill update {item.skill_name}: {item.to_dict()}"
+                                        for item in update_results
+                                    )
+                                    if any(item.ok for item in update_results):
+                                        if progress is not None:
+                                            progress("escalation skill update applied; reloading registry and rerunning")
+                                        roots = _roots_with_user_skill_root(self.skills)
+                                        self.skills = SkillRegistry(roots=roots, include_user=False)
+                                        seen_auditor_retries.clear()
+                                        auditor_retry_count = 0
+                                        continue
+                        elif auditor_retry_count >= 2:
+                            notes.append("auditor retry limit reached")
+                            if progress is not None:
+                                progress("loop stopped: auditor retry limit reached")
+                            escalated = _escalate_auditor_retry(
+                                agent_client=self.agent_client,
+                                task=task,
+                                user_request=user_request,
+                                workspace=str(workspace.root),
+                                skills=self.skills,
+                                plan=plan,
+                                trace=trace,
+                                review=review,
+                                notes=notes,
+                                reason="auditor retry limit reached",
+                                escalation_index=auditor_retry_count + 1,
+                            )
+                            if escalated is not None:
+                                review = _merge_escalation_review(review, escalated)
+                                notes.extend(_agent_notes("auditor_escalation", escalated))
+                                if _escalation_wants_skill_retry(escalated):
+                                    if progress is not None:
+                                        progress("auditor escalation proposed skill update; applying gated skill files")
+                                    update_results = apply_review_skill_updates(
+                                        escalated, skills=self.skills, workspace=workspace
+                                    )
+                                    notes.extend(
+                                        f"escalation skill update {item.skill_name}: {item.to_dict()}"
+                                        for item in update_results
+                                    )
+                                    if any(item.ok for item in update_results):
+                                        if progress is not None:
+                                            progress("escalation skill update applied; reloading registry and rerunning")
+                                        roots = _roots_with_user_skill_root(self.skills)
+                                        self.skills = SkillRegistry(roots=roots, include_user=False)
+                                        seen_auditor_retries.clear()
+                                        auditor_retry_count = 0
+                                        continue
+                        else:
+                            seen_auditor_retries.add(retry_signature)
+                            auditor_retry_count += 1
+                            if progress is not None:
+                                progress("returning auditor retry review to strategist")
+                            notes.append("auditor retry review returned to strategist")
+                            plan_override = self.strategist.replan_after_failure(
+                                task=task,
+                                user_request=user_request,
+                                workspace=workspace,
+                                skills=self.skills,
+                                previous_plan=plan,
+                                trace=_trace_with_auditor_review(trace, review),
+                                agent_client=self.agent_client,
+                            )
+                            notes.extend(note for note in plan_override.subagent_notes if "Codex profile" in note)
+                            if progress is not None:
+                                progress(f"strategist revised plan: {_format_plan_steps(plan_override)}")
+                            continue
                 return RunResult(
                     task=task,
                     workspace=str(workspace.root),
@@ -212,6 +316,56 @@ _HANDLER_SCHEMA: dict[str, Any] = {
         "safety_notes": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["route", "direct_response", "run_intent", "handoff_notes", "safety_notes"],
+    "additionalProperties": False,
+}
+
+
+def _skill_proposal_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "properties": {
+            "kind": {"type": "string"},
+            "skill_name": {"type": "string"},
+            "category": {"type": "string"},
+            "rationale": {"type": "string"},
+            "files": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
+                    },
+                    "required": ["path", "content"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        "required": ["kind", "skill_name", "category", "rationale", "files"],
+        "additionalProperties": False,
+    }
+
+
+_ESCALATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "decision": {"type": "string", "enum": ["return_to_user", "apply_skill_updates_and_retry"]},
+        "root_cause": {"type": "string"},
+        "next_action": {"type": "string"},
+        "user_summary": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}},
+        "skill_updates": {"type": "array", "items": _skill_proposal_schema()},
+        "skill_proposals": {"type": "array", "items": _skill_proposal_schema()},
+    },
+    "required": [
+        "decision",
+        "root_cause",
+        "next_action",
+        "user_summary",
+        "notes",
+        "skill_updates",
+        "skill_proposals",
+    ],
     "additionalProperties": False,
 }
 
@@ -252,6 +406,117 @@ def _agent_notes(role: str, data: dict[str, Any]) -> list[str]:
         return []
     suffix = f" session={session_id}" if session_id else ""
     return [f"{role} ran through Codex profile {profile}{suffix}"]
+
+
+def _escalate_auditor_retry(
+    *,
+    agent_client: SubagentClient | None,
+    task: str,
+    user_request: str,
+    workspace: str,
+    skills: SkillRegistry,
+    plan: Plan,
+    trace: list[Any],
+    review: dict[str, Any],
+    notes: list[str],
+    reason: str,
+    escalation_index: int,
+) -> dict[str, Any] | None:
+    if agent_client is None:
+        return None
+    role = f"auditor_escalation_{escalation_index}"
+    payload = {
+        "role": "auditor_escalation",
+        "contract": (
+            "You are a fresh Codex escalation session for a LoopMaster real-robot run. "
+            "The normal Auditor retry loop has repeated or hit its limit. Decide whether "
+            "the handler should return a concise failure summary to the user, or whether a "
+            "repository-local skill defect can be repaired through gated skill updates and "
+            "then retried. Do not ask the user for information that is already available in "
+            "the trace, skill docs, or skill implementations. Prefer apply_skill_updates_and_retry "
+            "only when you can provide complete replacement SKILL.md and/or policy.py content for "
+            "registered skills. The handler will validate and compile those files before rerunning. "
+            "If the defect is in core framework/platform code, external hardware state, licensing, "
+            "physical clearance, or safety approval, choose return_to_user with a concrete summary "
+            "and next_action. Return only JSON matching the schema."
+        ),
+        "escalation_reason": reason,
+        "task": task,
+        "user_request": user_request,
+        "workspace": workspace,
+        "plan": {
+            "task": plan.task,
+            "goal": plan.goal,
+            "steps": [{"name": step.name, "args": step.args, "why": step.why} for step in plan.steps],
+            "success_criteria": list(plan.success_criteria),
+            "risks": list(plan.risks),
+            "assumptions": list(plan.assumptions),
+            "research_questions": list(plan.research_questions),
+            "subagent_notes": list(plan.subagent_notes),
+        },
+        "trace": [step.to_dict() for step in trace],
+        "auditor_review": review,
+        "handler_notes": list(notes),
+        "available_skills": _skills_for_escalation(skills),
+        "decision_guidance": {
+            "return_to_user": (
+                "Use when no safe gated skill update can fix the issue, when the next step is "
+                "operator/hardware intervention, or when repeated execution would be unsafe."
+            ),
+            "apply_skill_updates_and_retry": (
+                "Use only with complete skill_proposals/skill_updates that can plausibly fix the "
+                "observed root cause without arbitrary repository edits."
+            ),
+        },
+    }
+    result = agent_client.run_json(role=role, prompt=json.dumps(payload, indent=2, ensure_ascii=False), schema=_ESCALATION_SCHEMA)
+    Path(workspace).joinpath(f"{role}.json").write_text(
+        json.dumps(result, indent=2, ensure_ascii=False, default=str) + "\n",
+        encoding="utf-8",
+    )
+    return result
+
+
+def _skills_for_escalation(skills: SkillRegistry) -> list[dict[str, Any]]:
+    out = []
+    for skill in skills.list():
+        body = str(getattr(skill, "body", "") or "")
+        if len(body) > 2400:
+            body = body[:2397].rstrip() + "..."
+        out.append(
+            {
+                "name": skill.name,
+                "category": skill.category,
+                "description": skill.description,
+                "args": skill.frontmatter.get("args", {}),
+                "usage_markdown": body,
+                "path": str(skill.path),
+                "is_user": skill.is_user,
+            }
+        )
+    return out
+
+
+def _escalation_wants_skill_retry(escalated: dict[str, Any]) -> bool:
+    if str(escalated.get("decision") or "") != "apply_skill_updates_and_retry":
+        return False
+    return bool(escalated.get("skill_proposals") or escalated.get("skill_updates"))
+
+
+def _merge_escalation_review(review: dict[str, Any], escalated: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(review)
+    root_cause = str(escalated.get("root_cause") or "").strip()
+    next_action = str(escalated.get("next_action") or "").strip()
+    if root_cause:
+        merged["root_cause"] = root_cause
+    if next_action:
+        merged["next_action"] = next_action
+    merged["escalation_decision"] = str(escalated.get("decision") or "")
+    merged["escalation_notes"] = [str(item) for item in escalated.get("notes") or []]
+    merged["skill_updates"] = escalated.get("skill_updates") or []
+    merged["skill_proposals"] = escalated.get("skill_proposals") or []
+    merged["success"] = False
+    return merged
 
 
 def _handler_route(data: dict[str, Any]) -> str:
@@ -315,6 +580,43 @@ def _skill_update_signature(review: dict[str, Any]) -> str:
     if not proposals:
         return ""
     return json.dumps(proposals, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _auditor_retry_signature(
+    review: dict[str, Any],
+    *,
+    agent_client: SubagentClient | None,
+) -> str:
+    if agent_client is None:
+        return ""
+    if str(review.get("verdict") or "") != "retry" or review.get("success"):
+        return ""
+    payload = {
+        "root_cause": str(review.get("root_cause") or ""),
+        "next_action": str(review.get("next_action") or ""),
+        "used_skills": review.get("used_skills") or [],
+    }
+    return json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+
+
+def _trace_with_auditor_review(trace: list[Any], review: dict[str, Any]) -> list[Any]:
+    return [
+        *trace,
+        TraceStep(
+            index=len(trace) + 1,
+            skill="auditor_review",
+            args={},
+            result={
+                "verdict": review.get("verdict"),
+                "root_cause": review.get("root_cause"),
+                "next_action": review.get("next_action"),
+                "notes": review.get("notes") or [],
+            },
+            ok=False,
+            why="Auditor requested retry after reviewing closed-loop evidence.",
+            role="auditor",
+        ),
+    ]
 
 
 def _auditor_failure_review(*, plan: Plan, trace: list[Any], error: Exception) -> dict[str, Any]:

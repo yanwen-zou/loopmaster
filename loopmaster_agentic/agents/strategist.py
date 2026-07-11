@@ -95,6 +95,17 @@ class Strategist:
         control_added |= _maybe_add_arm_ee(text, lowered, available, steps, research_questions)
         control_added |= _maybe_add_arm_joints(lowered, available, steps, research_questions)
 
+        if "init_arms" in available and _plan_needs_arm_init(steps):
+            insert_at = 1 if steps and steps[0].name == "observe" else 0
+            steps.insert(
+                insert_at,
+                SkillCall(
+                    "init_arms",
+                    {},
+                    "initialize both arms through the registered validated init skill before grasp or arm motion",
+                ),
+            )
+
         if not control_added and _looks_like_manipulation_goal(lowered):
             research_questions.append(
                 "Goal appears to require a task-specific manipulation policy, "
@@ -244,7 +255,16 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
             "not just action_sent acknowledgements. Add dwell/settling time through skill args "
             "when repeated targets would otherwise be issued too quickly to observe. Feedback is "
             "asynchronous, so plan for ranges/trends or multiple samples rather than one exact "
-            "post-command equality check. "
+            "post-command equality check. For explicit low-level body-frame base requests such "
+            "as moving forward/backward for N seconds, use set_base_velocity with duration_s, "
+            "then stop_motion and stopped-state observe. Do not insert navigation status or "
+            "semantic path-clearance steps as prerequisites for that low-level command unless "
+            "the user asked for autonomous map navigation or a registered clearance/safety skill "
+            "exists and returns an explicit unsafe/abort verdict. Every control command needs "
+            "explicit timing semantics: base velocity uses duration_s, gripper/lift/stop use "
+            "settle_s when feedback matters, and arm motion uses velocity_limit_rad_s plus "
+            "post-motion observe/settling. Do not satisfy motion requests by issuing several "
+            "control commands back-to-back with no duration or settle window. "
             "For each step, encode skill arguments as a compact JSON object string in args_json. "
             "Later step args may reference prior skill results with {\"$ref\":\"skill.path.to.value\"} "
             "or string templates like ${skill.path.to.value}; the Worker resolves these from context.memory. "
@@ -286,7 +306,8 @@ def _strategist_retry_prompt(
     payload = {
         "role": "strategist",
         "contract": (
-            "You are the LoopMaster Strategist retry pass. The previous worker execution failed. "
+            "You are the LoopMaster Strategist retry pass. The previous worker execution failed "
+            "or the Auditor requested more closed-loop evidence. "
             "Inspect the trace, correct fixable skill argument/schema mistakes, and return a revised "
             "registry-grounded plan. Use only the provided skill names and each skill's documented args. "
             "Do not ask the user to fix schema mismatches that you can correct. Keep stop_motion at the "
@@ -300,7 +321,15 @@ def _strategist_retry_prompt(
             "do not treat action_sent alone as success; require observe feedback that the robot "
             "state reached or moved toward the target, and add dwell/settling time when commands "
             "were sent too quickly for physical motion. Feedback can lag commands, so prefer "
-            "multi-sample trends/ranges over single-sample exact equality. "
+            "multi-sample trends/ranges over single-sample exact equality. For low-level timed "
+            "base motion, do not escalate a successful duration/velocity/stopped-state retry into "
+            "navigation status or a semantic path-clearance task unless a registered clearance/safety "
+            "skill exists and returns an explicit unsafe or abort result; generic grounded_sam2 "
+            "detections and navigation status are not by themselves clearance verdicts. Every revised "
+            "control plan must include explicit timing semantics: duration_s for base velocity, "
+            "settle_s for gripper/lift/stop when feedback matters, and velocity_limit_rad_s plus "
+            "settling/observe for arms. Do not retry by rapidly emitting multiple control commands "
+            "without a duration or settle window. "
             "Later step args may reference prior skill results with {\"$ref\":\"skill.path.to.value\"} "
             "or string templates like ${skill.path.to.value}. "
             "Return only JSON matching the schema."
@@ -674,6 +703,10 @@ def _looks_like_manipulation_goal(text: str) -> bool:
         "自主",
     )
     return any(item in text for item in keywords)
+
+
+def _plan_needs_arm_init(steps: list[SkillCall]) -> bool:
+    return any(step.name in {"detect_grasps", "move_arm_ee", "move_arm_joints"} for step in steps)
 
 
 def _mentions_any(text: str, needles: tuple[str, ...]) -> bool:

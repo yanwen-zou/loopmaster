@@ -47,8 +47,10 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "create_skill",
                 "detect_grasps",
                 "grounded_sam2",
+                "init_arms",
                 "move_arm_ee",
                 "move_arm_joints",
+                "navigation",
                 "observe",
                 "set_base_velocity",
                 "set_gripper",
@@ -60,6 +62,48 @@ class LoopMasterAgenticTests(unittest.TestCase):
         searchable = "\n".join(f"{skill.category}/{skill.name}" for skill in skills).lower()
         for term in forbidden_terms:
             self.assertNotIn(term, searchable)
+
+    def test_navigation_skill_sends_map_goal_and_records_goal_id(self) -> None:
+        from loopmaster_agentic.skills.base.navigation.navigation import policy
+
+        sent_payloads = []
+        status = {
+            "pose": {"x": 1.0, "y": 2.0, "yaw": 0.5},
+            "navigation": {"state": "navigating", "goal_id": "g1", "distance_remaining": 0.7},
+            "last_command_ack": {
+                "type": "navigate_to_pose",
+                "accepted": True,
+                "message": "Nav2 accepted the goal",
+                "goal_id": "g1",
+            },
+        }
+
+        def fake_send(robot_ip, command_port, payload, send_timeout_ms):
+            sent_payloads.append(payload)
+            return {"ok": True, "endpoint": f"tcp://{robot_ip}:{command_port}"}
+
+        with mock.patch.object(policy, "_send_json", side_effect=fake_send), mock.patch.object(
+            policy, "_receive_status", return_value=status
+        ):
+            context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("nav", root=Path("/tmp")))
+            result = policy.dispatch(context, {"x": 1.5, "y": -0.8, "yaw": 1.57, "goal_id": "g1"})
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["ack_received"])
+        self.assertEqual(result["goal_id"], "g1")
+        self.assertEqual(context.memory[policy.MEMORY_LAST_GOAL_ID], "g1")
+        self.assertEqual(sent_payloads[0]["type"], "navigate_to_pose")
+        self.assertEqual(sent_payloads[0]["frame_id"], "map")
+        self.assertEqual(sent_payloads[0]["x"], 1.5)
+
+    def test_navigation_skill_rejects_invalid_goal_number(self) -> None:
+        from loopmaster_agentic.skills.base.navigation.navigation import policy
+
+        context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("nav_bad", root=Path("/tmp")))
+        result = policy.dispatch(context, {"x": "bad", "y": 0, "yaw": 0})
+
+        self.assertFalse(result["ok"])
+        self.assertIn("x must be a number", result["error"])
 
     def test_hei_platform_clamps_arm_targets_to_original_limits(self) -> None:
         platform = HeiRebotLiftPlatform()
@@ -73,6 +117,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "left_joint_1.pos": 99.0,
                 "right_gripper.pos": 99.0,
                 "x.vel": 0.2,
+                "y.vel": 0.05,
             }
         )
 
@@ -81,7 +126,9 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(sent["left_joint_1.pos"], 0.3)
         self.assertEqual(sent["right_gripper.pos"], 0.0)
         self.assertEqual(sent["x.vel"], 0.2)
-        self.assertEqual(fake.actions[-1], sent)
+        self.assertEqual(sent["y.vel"], 0.05)
+        self.assertEqual(fake.actions[-1]["x.vel"], -0.2)
+        self.assertEqual(fake.actions[-1]["y.vel"], -0.05)
 
         arm_sent = platform.command_arm("left", {"joint_1": -99.0, "joint_4": 99.0})
         self.assertEqual(arm_sent["left_joint_1.pos"], -1.5)
@@ -89,6 +136,8 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         gripper_sent = platform.set_gripper("right", 99.0)
         self.assertEqual(gripper_sent["right_gripper.pos"], 0.0)
+        gripper_open = platform.set_gripper("right", -99.0)
+        self.assertEqual(gripper_open["right_gripper.pos"], -5.0)
 
     def test_move_arm_ee_skill_returns_structured_ik_errors(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
@@ -106,7 +155,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("IK failed", result["error"])
 
-    def test_move_arm_ee_skill_limits_joint_step(self) -> None:
+    def test_move_arm_ee_skill_uses_velocity_limit_without_waypoints(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
 
         class Platform(DryRunPlatform):
@@ -135,15 +184,15 @@ class LoopMasterAgenticTests(unittest.TestCase):
                     "side": "right",
                     "pose": {"matrix": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]},
                     "input_frame": "arm",
-                    "max_joint_step": 0.05,
-                    "step_dt": 0.0,
+                    "velocity_limit_rad_s": 0.4,
                 },
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(len(result["trajectory"]), 3)
-        self.assertAlmostEqual(platform.actions[0]["joint_1"], 0.04)
-        self.assertAlmostEqual(platform.actions[-1]["joint_1"], 0.12)
+        self.assertEqual(result["trajectory"], [])
+        self.assertAlmostEqual(platform.actions[-1]["right_joint_1.pos"], 0.12)
+        self.assertIn("left_joint_1.pos", platform.actions[-1])
+        self.assertEqual(result["velocity_limit_rad_s"], 0.4)
 
     def test_move_arm_ee_skill_uses_explicit_current_positions(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
@@ -176,15 +225,15 @@ class LoopMasterAgenticTests(unittest.TestCase):
                     "side": "right",
                     "pose": {"position": [0.2, 0.0, 0.3]},
                     "current_positions": current,
-                    "max_joint_step": 0.05,
-                    "step_dt": 0.0,
+                    "velocity_limit_rad_s": 0.4,
                 },
             )
 
         self.assertTrue(result["ok"])
         self.assertEqual(solve.call_args.kwargs["current_positions"], current)
-        self.assertEqual(len(result["trajectory"]), 2)
-        self.assertAlmostEqual(platform.actions[0]["joint_1"], 0.15)
+        self.assertEqual(result["trajectory"], [])
+        self.assertAlmostEqual(platform.actions[0]["right_joint_1.pos"], 0.2)
+        self.assertIn("left_joint_1.pos", platform.actions[0])
 
     def test_move_arm_ee_skill_holds_other_arm_positions(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
@@ -220,15 +269,58 @@ class LoopMasterAgenticTests(unittest.TestCase):
                     "pose": {"position": [0.2, 0.0, 0.3]},
                     "current_positions": current,
                     "other_arm_positions": other,
-                    "max_joint_step": 0.05,
-                    "step_dt": 0.0,
+                    "velocity_limit_rad_s": 0.4,
                 },
             )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(len(result["trajectory"]), 2)
         self.assertEqual(platform.actions[0]["left"], other)
         self.assertAlmostEqual(platform.actions[-1]["right"]["joint_1"], 0.2)
+
+    def test_move_arm_ee_parses_prefixed_state_and_holds_other_arm(self) -> None:
+        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+
+        class Platform(DryRunPlatform):
+            def command_arms(self, *, right=None, left=None) -> dict[str, float]:
+                self.actions.append({"right": dict(right or {}), "left": dict(left or {})})
+                sent = {}
+                if right:
+                    sent.update({f"right_{joint}.pos": float(value) for joint, value in right.items()})
+                if left:
+                    sent.update({f"left_{joint}.pos": float(value) for joint, value in left.items()})
+                return sent
+
+        fake_ik = {
+            "ik_success": True,
+            "positions": {joint: 0.0 for joint in policy.JOINTS},
+            "target_arm_pose": [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]],
+            "target_camera_pose": None,
+            "transform": None,
+            "ik_info": {},
+        }
+        fake_ik["positions"]["joint_5"] = 0.4
+        state = {}
+        for side in ("right", "left"):
+            for joint in policy.JOINTS:
+                state[f"{side}_{joint}.pos"] = 0.1 if side == "right" else -0.2
+
+        platform = Platform()
+        with mock.patch.object(policy, "solve_arm_ee_dict", return_value=fake_ik) as solve:
+            result = policy.dispatch(
+                SkillContext(platform=platform, workspace=new_workspace("move_ee_prefixed_state", root=Path("/tmp"))),
+                {
+                    "side": "right",
+                    "pose": {"position": [0.2, 0.0, 0.3]},
+                    "current_positions": state,
+                    "other_arm_positions": state,
+                    "velocity_limit_rad_s": 0.4,
+                },
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(solve.call_args.kwargs["current_positions"]["joint_1"], 0.1)
+        self.assertEqual(platform.actions[-1]["left"], {joint: -0.2 for joint in policy.JOINTS})
+        self.assertEqual(set(platform.actions[-1]["right"]), set(policy.JOINTS))
 
     def test_move_arm_joints_skill_can_command_both_arms(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_joints import policy
@@ -245,12 +337,126 @@ class LoopMasterAgenticTests(unittest.TestCase):
         positions = {joint: 0.1 for joint in policy.JOINTS}
         result = policy.dispatch(
             SkillContext(platform=platform, workspace=new_workspace("move_joints_both", root=Path("/tmp"))),
-            {"side": "both", "positions": positions},
+            {"side": "both", "positions": positions, "velocity_limit_rad_s": 0.4},
         )
 
         self.assertTrue(result["ok"])
+        self.assertEqual(result["trajectory"], [])
         self.assertEqual(platform.actions[-1]["right"], positions)
         self.assertEqual(platform.actions[-1]["left"], positions)
+
+    def test_move_arm_joints_preserves_unspecified_joints_from_current_state(self) -> None:
+        from loopmaster_agentic.skills.base.control.move_arm_joints import policy
+
+        platform = DryRunPlatform()
+        for joint in policy.JOINTS:
+            platform.state[f"left_{joint}.pos"] = -0.3
+        result = policy.dispatch(
+            SkillContext(platform=platform, workspace=new_workspace("move_joints_preserve", root=Path("/tmp"))),
+            {"side": "left", "positions": {"joint_5": 0.5}, "velocity_limit_rad_s": 0.4},
+        )
+
+        self.assertTrue(result["ok"])
+        sent = result["action_sent"]
+        self.assertEqual(set(sent), {f"left_{joint}.pos" for joint in policy.JOINTS})
+        self.assertEqual(sent["left_joint_5.pos"], 0.5)
+        self.assertEqual(sent["left_joint_1.pos"], -0.3)
+
+    def test_init_arms_skill_commands_and_verifies_registered_pose(self) -> None:
+        platform = DryRunPlatform()
+        workspace = new_workspace("init_arms", root=Path("/tmp"))
+        registry = SkillRegistry(include_user=False)
+
+        result = registry.dispatch(
+            "init_arms",
+            SkillContext(platform=platform, workspace=workspace),
+            {"settle_s": 0.0, "tolerance_rad": 0.001, "velocity_limit_rad_s": 0.4},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["verified"]["ok"])
+        self.assertEqual(result["trajectory"], [])
+        self.assertEqual(result["positions"]["joint_3"], -0.91)
+        self.assertAlmostEqual(platform.state["right_joint_3.pos"], -0.91)
+        self.assertAlmostEqual(platform.state["left_joint_3.pos"], -0.91)
+
+    def test_set_gripper_uses_signed_open_close_convention(self) -> None:
+        from loopmaster_agentic.skills.base.control.set_gripper import policy
+
+        context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("gripper", root=Path("/tmp")))
+
+        bad = policy.dispatch(context, {"side": "right", "position": 1.0})
+        self.assertFalse(bad["ok"])
+        self.assertIn("-5.0", bad["error"])
+
+        opened = policy.dispatch(context, {"side": "right", "position": -5.0})
+        self.assertTrue(opened["ok"])
+        self.assertEqual(opened["commanded_position"], -5.0)
+        self.assertEqual(opened["action_sent"]["right_gripper.pos"], -5.0)
+
+        closed = policy.dispatch(context, {"side": "right", "position": 0.0})
+        self.assertTrue(closed["ok"])
+        self.assertEqual(closed["commanded_position"], 0.0)
+
+    def test_set_gripper_filters_full_action_vector_and_can_verify_feedback(self) -> None:
+        from loopmaster_agentic.skills.base.control.set_gripper import policy
+
+        class Platform(DryRunPlatform):
+            def set_gripper(self, side: str, position: float) -> dict[str, float]:
+                key = f"{side}_gripper.pos"
+                self.state[key] = float(position)
+                sent = {control_key: 0.0 for control_key in self.state}
+                sent[key] = float(position)
+                return sent
+
+        platform = Platform()
+        platform.state["right_gripper.pos"] = -5.0
+        context = SkillContext(platform=platform, workspace=new_workspace("gripper_filter", root=Path("/tmp")))
+
+        result = policy.dispatch(context, {"side": "right", "position": 0.0, "verify": True})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action_sent"], {"right_gripper.pos": 0.0})
+        self.assertTrue(result["verified"]["ok"])
+        self.assertNotIn("right_joint_1.pos", result["action_sent"])
+        self.assertNotIn("left_joint_1.pos", result["action_sent"])
+
+    def test_set_base_velocity_filters_full_action_vector(self) -> None:
+        from loopmaster_agentic.skills.base.control.set_base_velocity import policy
+
+        class Platform(DryRunPlatform):
+            def command_chassis(self, x=0.0, y=0.0, theta=0.0) -> dict[str, float]:
+                self.send_action({"x.vel": x, "y.vel": y, "theta.vel": theta})
+                sent = {control_key: 0.0 for control_key in self.state}
+                sent.update({"x.vel": x, "y.vel": y, "theta.vel": theta})
+                return sent
+
+        context = SkillContext(platform=Platform(), workspace=new_workspace("base_filter", root=Path("/tmp")))
+
+        result = policy.dispatch(context, {"x": 0.1, "y": 0.0, "theta": 0.0})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action_sent"], {"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.0})
+        self.assertNotIn("right_joint_1.pos", result["action_sent"])
+        self.assertNotIn("height.pos", result["action_sent"])
+
+    def test_lift_and_stop_support_settle_windows(self) -> None:
+        from loopmaster_agentic.skills.base.control.set_lift_height import policy as lift_policy
+        from loopmaster_agentic.skills.base.control.stop_motion import policy as stop_policy
+
+        platform = DryRunPlatform()
+        context = SkillContext(platform=platform, workspace=new_workspace("settle_controls", root=Path("/tmp")))
+        with mock.patch.object(lift_policy.time, "sleep", return_value=None) as lift_sleep:
+            lift = lift_policy.dispatch(context, {"height_mm": 12.0, "settle_s": 0.25})
+        with mock.patch.object(stop_policy.time, "sleep", return_value=None) as stop_sleep:
+            stop = stop_policy.dispatch(context, {"reason": "done", "settle_s": 0.5})
+
+        self.assertTrue(lift["ok"])
+        self.assertEqual(lift["settle_s"], 0.25)
+        lift_sleep.assert_called_once_with(0.25)
+        self.assertTrue(stop["ok"])
+        self.assertEqual(stop["settle_s"], 0.5)
+        stop_sleep.assert_called_once_with(0.5)
 
     def test_move_arm_ee_position_only_target_ignores_orientation(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
@@ -370,8 +576,8 @@ class LoopMasterAgenticTests(unittest.TestCase):
     def test_handler_plans_explicit_low_level_control(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = Handler(workspace_root=Path(tmp)).run(
-                task="set right gripper position=0.25",
-                user_request="set right gripper position=0.25",
+                task="set right gripper position=-0.25",
+                user_request="set right gripper position=-0.25",
                 platform=DryRunPlatform(),
             )
             self.assertTrue(result.success)
@@ -476,6 +682,78 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertFalse(trace[0].ok)
             self.assertIn("proceed=false", trace[0].result["error"])
             self.assertTrue((workspace.root / "trace.jsonl").is_file())
+
+    def test_worker_prompt_exposes_registered_init_arms_skill(self) -> None:
+        class CapturingWorkerAgent:
+            def run_json(self, *, role: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+                self.payload = json.loads(prompt)
+                return {"proceed": True, "execution_notes": [], "concerns": []}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            agent = CapturingWorkerAgent()
+            Worker().execute(
+                plan=Plan(
+                    task="init arms",
+                    goal="init arms",
+                    steps=[SkillCall("init_arms", {"settle_s": 0.0, "velocity_limit_rad_s": 0.4}, "registered init")],
+                ),
+                workspace=new_workspace("worker_init_prompt", root=Path(tmp) / "workspaces"),
+                platform=DryRunPlatform(),
+                skills=SkillRegistry(include_user=False),
+                agent_client=agent,
+            )
+
+        names = {skill["name"] for skill in agent.payload["available_skills"]}
+        self.assertIn("init_arms", names)
+        self.assertIn("registered arm initialization skill", agent.payload["contract"])
+
+    def test_worker_prompt_allows_bounded_low_level_backward_base_motion(self) -> None:
+        from loopmaster_agentic.agents.worker import _worker_prompt
+
+        prompt = _worker_prompt(
+            plan=Plan(
+                task="move backward",
+                goal="move backward for 5 seconds",
+                steps=[
+                    SkillCall(
+                        "set_base_velocity",
+                        {"x": -0.1, "y": 0.0, "theta": 0.0, "duration_s": 5.0, "refresh_hz": 5.0},
+                        "bounded low-level operator command",
+                    ),
+                    SkillCall("observe", {"include_state": True}, "check motion feedback"),
+                    SkillCall("stop_motion", {"reason": "done"}, "safety stop"),
+                    SkillCall("observe", {"include_state": True}, "verify stopped"),
+                ],
+            ),
+            workspace=new_workspace("worker_backward_prompt", root=Path("/tmp")),
+            skills=SkillRegistry(include_user=False).list(),
+        )
+
+        self.assertIn("duration_s<=5.0", prompt)
+        self.assertIn("Do not block such a plan solely because there is no rear camera", prompt)
+        self.assertIn("registered safety or clearance skill has explicitly returned unsafe", prompt)
+
+    def test_control_skill_docs_require_timing_semantics(self) -> None:
+        registry = SkillRegistry(include_user=False)
+        control_names = {
+            "init_arms",
+            "move_arm_ee",
+            "move_arm_joints",
+            "set_base_velocity",
+            "set_gripper",
+            "set_lift_height",
+            "stop_motion",
+        }
+
+        for name in control_names:
+            skill = registry.get(name)
+            self.assertIsNotNone(skill, name)
+            body = skill.body.lower()
+            self.assertTrue(
+                any(term in body for term in ("duration_s", "settle_s", "velocity_limit_rad_s")),
+                name,
+            )
+            self.assertTrue(any(term in body for term in ("time", "timing")), name)
 
     def test_worker_learned_skill_can_call_registered_skills_with_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -677,6 +955,34 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertAlmostEqual(params["cx"], 316.76116943359375)
         self.assertAlmostEqual(params["cy"], 242.75991821289062)
 
+    def test_detect_grasps_rejects_empty_explicit_mask_region(self) -> None:
+        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import _should_reject_empty_explicit_region
+
+        self.assertTrue(_should_reject_empty_explicit_region({"seg_mask_path": "/tmp/seg.png"}, 0))
+        self.assertFalse(_should_reject_empty_explicit_region({"seg_mask_path": "/tmp/seg.png"}, 1))
+        self.assertFalse(_should_reject_empty_explicit_region({}, 0))
+
+    def test_auditor_prompt_does_not_treat_grounded_sam_as_clearance_verdict(self) -> None:
+        from loopmaster_agentic.agents.auditor import _auditor_prompt
+
+        prompt = _auditor_prompt(
+            plan=Plan(task="move forward", goal="move forward"),
+            trace=[],
+            candidate_review={"verdict": "done"},
+        )
+
+        self.assertIn("grounded_sam2", prompt)
+        self.assertIn("Do not convert generic object detections", prompt)
+        self.assertIn("Treat ambiguous perception annotations as notes or risks", prompt)
+        self.assertIn("duration/velocity and final stopped state", prompt)
+
+    def test_navigation_docs_do_not_present_status_as_clearance_gate(self) -> None:
+        skill = SkillRegistry(include_user=False).get("navigation")
+
+        self.assertIsNotNone(skill)
+        self.assertIn("does not prove", skill.body)
+        self.assertIn("path-clearance or rear-obstacle", skill.body)
+
     def test_detect_grasps_wraps_license_check_with_network_context(self) -> None:
         import subprocess
 
@@ -713,12 +1019,12 @@ class LoopMasterAgenticTests(unittest.TestCase):
             )
 
             steps = [step.name for step in plan.steps]
-            self.assertEqual(steps[:4], ["observe", "capture_image", "grounded_sam2", "detect_grasps"])
-            self.assertEqual(plan.steps[1].args["source"], "d435_rgbd")
-            self.assertEqual(plan.steps[2].args["img_path"], {"$ref": "capture_image.rgb.path"})
-            self.assertEqual(plan.steps[3].args["color_path"], {"$ref": "capture_image.rgb.path"})
-            self.assertEqual(plan.steps[3].args["depth_path"], {"$ref": "capture_image.depth.path"})
-            self.assertEqual(plan.steps[3].args["seg_mask_path"], {"$ref": "grounded_sam2.seg_mask_path"})
+            self.assertEqual(steps[:5], ["observe", "init_arms", "capture_image", "grounded_sam2", "detect_grasps"])
+            self.assertEqual(plan.steps[2].args["source"], "d435_rgbd")
+            self.assertEqual(plan.steps[3].args["img_path"], {"$ref": "capture_image.rgb.path"})
+            self.assertEqual(plan.steps[4].args["color_path"], {"$ref": "capture_image.rgb.path"})
+            self.assertEqual(plan.steps[4].args["depth_path"], {"$ref": "capture_image.depth.path"})
+            self.assertEqual(plan.steps[4].args["seg_mask_path"], {"$ref": "grounded_sam2.seg_mask_path"})
 
     def test_handler_connects_all_four_roles_to_subagent_client(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -881,7 +1187,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             )
             self.assertEqual(len(resumed.messages), 2)
             self.assertIn("inspect robot state", resumed.reply("/history"))
-            self.assertIn("set_gripper", resumed.reply("set right gripper position=0.25"))
+            self.assertIn("set_gripper", resumed.reply("set right gripper position=-0.25"))
             self.assertEqual(len(resumed.messages), 4)
 
     def test_chat_cli_once_uses_persistent_session(self) -> None:
@@ -958,6 +1264,168 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIn("handler agent answered directly", events[-1])
         self.assertEqual(session.last_result.trace, [])
 
+    def test_handler_replans_after_auditor_retry_without_skill_update(self) -> None:
+        class AuditorRetryClient(_FakeSubagentClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.auditor_calls = 0
+                self.retry_prompts = 0
+
+            def run_json(self, *, role: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+                if role == "strategist":
+                    self.roles.append(role)
+                    payload = json.loads(prompt)
+                    if "failed_trace" in payload:
+                        self.retry_prompts += 1
+                    codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+                    return {
+                        "goal": payload["user_request"],
+                        "steps": [
+                            {
+                                "name": "set_gripper",
+                                "args_json": json.dumps({"side": "right", "position": -5.0}),
+                                "why": "open gripper",
+                            },
+                            {
+                                "name": "stop_motion",
+                                "args_json": json.dumps({"reason": "test end"}),
+                                "why": "safety stop",
+                            },
+                        ],
+                        "success_criteria": ["auditor retry path is exercised"],
+                        "risks": [],
+                        "assumptions": [],
+                        "research_questions": [],
+                        "subagent_notes": ["retry plan" if "failed_trace" in payload else "initial plan"],
+                        "_codex": codex,
+                    }
+                if role == "auditor":
+                    self.roles.append(role)
+                    self.auditor_calls += 1
+                    payload = json.loads(prompt)
+                    review = payload["candidate_review"]
+                    codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+                    if self.auditor_calls == 1:
+                        return {
+                            **review,
+                            "verdict": "retry",
+                            "root_cause": "need a second closed-loop verification pass",
+                            "next_action": "Replan with additional verification evidence.",
+                            "success": False,
+                            "notes": ["fake retry"],
+                            "skill_updates": [],
+                            "skill_proposals": [],
+                            "_codex": codex,
+                        }
+                    return {
+                        **review,
+                        "verdict": "done",
+                        "root_cause": "",
+                        "next_action": "",
+                        "success": True,
+                        "notes": ["fake done"],
+                        "skill_updates": [],
+                        "skill_proposals": [],
+                        "_codex": codex,
+                    }
+                return super().run_json(role=role, prompt=prompt, schema=schema)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+            fake = AuditorRetryClient()
+            result = Handler(workspace_root=Path(tmp) / "workspaces", agent_client=fake).run(
+                task="open gripper",
+                user_request="open gripper",
+                platform=DryRunPlatform(),
+                progress=events.append,
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(fake.auditor_calls, 2)
+        self.assertEqual(fake.retry_prompts, 1)
+        self.assertIn("returning auditor retry review to strategist", events)
+
+    def test_handler_escalates_repeated_auditor_retry_to_fresh_codex_role(self) -> None:
+        class RepeatedAuditorRetryClient(_FakeSubagentClient):
+            def __init__(self) -> None:
+                super().__init__()
+                self.escalation_payload = None
+
+            def run_json(self, *, role: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+                if role == "strategist":
+                    self.roles.append(role)
+                    payload = json.loads(prompt)
+                    codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+                    return {
+                        "goal": payload["user_request"],
+                        "steps": [
+                            {
+                                "name": "set_gripper",
+                                "args_json": json.dumps({"side": "right", "position": -5.0}),
+                                "why": "open gripper",
+                            },
+                            {
+                                "name": "stop_motion",
+                                "args_json": json.dumps({"reason": "test end"}),
+                                "why": "safety stop",
+                            },
+                        ],
+                        "success_criteria": ["retry escalation path is exercised"],
+                        "risks": [],
+                        "assumptions": [],
+                        "research_questions": [],
+                        "subagent_notes": ["fake plan"],
+                        "_codex": codex,
+                    }
+                if role == "auditor":
+                    self.roles.append(role)
+                    payload = json.loads(prompt)
+                    review = payload["candidate_review"]
+                    codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+                    return {
+                        **review,
+                        "verdict": "retry",
+                        "root_cause": "same closed-loop evidence gap",
+                        "next_action": "Escalate after repeated retry.",
+                        "success": False,
+                        "notes": ["same retry"],
+                        "skill_updates": [],
+                        "skill_proposals": [],
+                        "_codex": codex,
+                    }
+                if role.startswith("auditor_escalation_"):
+                    self.roles.append(role)
+                    self.escalation_payload = json.loads(prompt)
+                    codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
+                    return {
+                        "decision": "return_to_user",
+                        "root_cause": "escalation decided this needs operator review",
+                        "next_action": "Inspect hardware state before retrying.",
+                        "user_summary": "operator review needed",
+                        "notes": ["fresh escalation session reviewed full trace"],
+                        "skill_updates": [],
+                        "skill_proposals": [],
+                        "_codex": codex,
+                    }
+                return super().run_json(role=role, prompt=prompt, schema=schema)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            events = []
+            fake = RepeatedAuditorRetryClient()
+            result = Handler(workspace_root=Path(tmp) / "workspaces", agent_client=fake).run(
+                task="open gripper",
+                user_request="open gripper",
+                platform=DryRunPlatform(),
+                progress=events.append,
+            )
+
+        self.assertFalse(result.success)
+        self.assertIn("auditor_escalation_2", fake.roles)
+        self.assertIsNotNone(fake.escalation_payload)
+        self.assertEqual(fake.escalation_payload["auditor_review"]["root_cause"], "same closed-loop evidence gap")
+        self.assertEqual(result.review["root_cause"], "escalation decided this needs operator review")
+        self.assertEqual(result.review["escalation_decision"], "return_to_user")
+
     def test_successful_handler_reply_hides_internal_auditor_fields(self) -> None:
         result = RunResult(
             task="check connection",
@@ -1006,7 +1474,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertNotIn("`observe` args=", reply)
         self.assertIn("本轮调用了：observe, capture_image", reply)
 
-    def test_handler_reply_includes_failed_skill_args_and_error(self) -> None:
+    def test_handler_reply_summarizes_failed_skill_naturally(self) -> None:
         result = RunResult(
             task="oscillate left joint5",
             workspace="/tmp/workspace",
@@ -1042,10 +1510,59 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         reply = format_handler_reply(result)
 
-        self.assertIn('`move_arm_joints` args={"arm": "left"', reply)
-        self.assertIn("error=side must be left or right", reply)
+        self.assertIn("这轮没有完成，卡在 `move_arm_joints`", reply)
+        self.assertIn("机械臂侧别不对", reply)
+        self.assertNotIn('args={"arm": "left"', reply)
+        self.assertNotIn("失败点", reply)
         self.assertNotIn("`stop_motion` args=", reply)
         self.assertNotIn("role=worker.safety", reply)
+
+    def test_handler_reply_summarizes_navigation_status_timeout_naturally(self) -> None:
+        result = RunResult(
+            task="你能看到现在自己在map中的位置吗",
+            workspace="/tmp/workspace",
+            plan=Plan(task="map pose", goal="query map pose"),
+            trace=[
+                TraceStep(
+                    index=1,
+                    skill="observe",
+                    args={"include_state": True},
+                    result={"ok": True, "observation": {"state_keys": ["x.vel"]}},
+                    ok=True,
+                ),
+                TraceStep(
+                    index=2,
+                    skill="navigation",
+                    args={
+                        "command": "status",
+                        "robot_ip": "192.168.31.22",
+                        "status_port": 7210,
+                        "status_timeout_s": 5.0,
+                    },
+                    result={"ok": False, "error": "no navigation status received"},
+                    ok=False,
+                    why="query map pose",
+                ),
+            ],
+            review={
+                "verdict": "retry",
+                "root_cause": "The robot interface responded to observe, but observe only exposed proprioceptive state.",
+                "next_action": "Return a concise failure summary to the user.",
+                "research_questions": [],
+                "used_skills": ["observe", "navigation"],
+                "success": False,
+            },
+            success=False,
+        )
+
+        reply = format_handler_reply(result)
+
+        self.assertIn("这轮没有完成，卡在 `navigation`", reply)
+        self.assertIn("没有收到导航状态", reply)
+        self.assertIn("请先确认机器人端导航栈", reply)
+        self.assertNotIn("失败点", reply)
+        self.assertNotIn("The robot interface responded", reply)
+        self.assertNotIn("tcp://192.168.31.22:7210", reply)
 
     def test_handler_reply_summarizes_control_targets(self) -> None:
         result = RunResult(
@@ -1143,12 +1660,16 @@ class LoopMasterAgenticTests(unittest.TestCase):
             "front": _FakeImage((480, 640, 3)),
             "left_joint_1.pos": 0.25,
             "height.pos": -10,
+            "x.vel": -0.2,
+            "y.vel": -0.05,
             "status": "ok",
         }
         obs = split_hei_observation(raw)
         self.assertIn("front", obs.images)
         self.assertEqual(obs.state["left_joint_1.pos"], 0.25)
         self.assertEqual(obs.state["height.pos"], -10.0)
+        self.assertEqual(obs.state["x.vel"], 0.2)
+        self.assertEqual(obs.state["y.vel"], 0.05)
         self.assertEqual(obs.extras["status"], "ok")
 
     def test_observe_skill_returns_numeric_state_values(self) -> None:
@@ -1291,16 +1812,69 @@ class LoopMasterAgenticTests(unittest.TestCase):
         platform._robot = robot
 
         self.assertEqual(
-            platform.command_chassis(x=0.1, y=0.0, theta=0.2),
-            {"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.2},
+            platform.command_chassis(x=0.1, y=0.05, theta=0.2),
+            {"x.vel": 0.1, "y.vel": 0.05, "theta.vel": 0.2},
         )
-        self.assertEqual(robot.actions[-1], {"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.2})
+        self.assertEqual(robot.actions[-1], {"x.vel": -0.1, "y.vel": -0.05, "theta.vel": 0.2})
 
         self.assertEqual(platform.set_gripper("right", -0.5), {"right_gripper.pos": -0.5})
         self.assertEqual(robot.actions[-1], {"right_gripper.pos": -0.5})
 
         self.assertIs(platform.get_head_image(), robot.observation["front"])
         self.assertEqual(set(platform.get_wrist_images()), {"left_wrist", "right_wrist"})
+
+    def test_hei_platform_filters_full_client_action_vector_to_requested_keys(self) -> None:
+        class FullVectorRobot(_FakeHeiRobot):
+            def send_action(self, action):
+                self.actions.append(dict(action))
+                sent = {key: 0.0 for key in self.observation}
+                sent.update(action)
+                sent["right_joint_1.pos"] = 0.0
+                sent["left_joint_1.pos"] = 0.0
+                return sent
+
+        robot = FullVectorRobot()
+        platform = HeiRebotLiftPlatform()
+        platform._robot = robot
+
+        self.assertEqual(platform.set_gripper("right", -5.0), {"right_gripper.pos": -5.0})
+        self.assertEqual(robot.actions[-1], {"right_gripper.pos": -5.0})
+
+    def test_hei_platform_filters_full_chassis_action_vector_to_base_keys(self) -> None:
+        class FullVectorRobot(_FakeHeiRobot):
+            def command_chassis(self, *, x=0.0, y=0.0, theta=0.0):
+                return {
+                    "x.vel": x,
+                    "y.vel": y,
+                    "theta.vel": theta,
+                    "right_joint_1.pos": 0.0,
+                    "left_joint_1.pos": 0.0,
+                    "height.pos": 0.0,
+                }
+
+        robot = FullVectorRobot()
+        platform = HeiRebotLiftPlatform()
+        platform._robot = robot
+
+        self.assertEqual(platform.command_chassis(x=0.1), {"x.vel": 0.1, "y.vel": 0.0, "theta.vel": 0.0})
+
+    def test_hei_platform_passes_arm_velocity_limit_to_arm_interface(self) -> None:
+        class Arms:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def command_side(self, side, positions, *, velocity_limit_rad_s=None):
+                self.calls.append((side, dict(positions), velocity_limit_rad_s))
+                return {f"{side}_{joint}.pos": value for joint, value in positions.items()}
+
+        robot = SimpleNamespace(arms=Arms())
+        platform = HeiRebotLiftPlatform()
+        platform._robot = robot
+
+        sent = platform.command_arm("right", {"joint_1": 0.2}, velocity_limit_rad_s=0.4)
+
+        self.assertEqual(sent["right_joint_1.pos"], 0.2)
+        self.assertEqual(robot.arms.calls[-1][2], 0.4)
 
     def test_anygrasp_skill_reports_missing_sdk_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1441,7 +2015,7 @@ class _RetrySubagentClient(_FakeSubagentClient):
         payload = json.loads(prompt)
         codex = {"profile": self.profile, "session_id": f"fake-{role}", "role": role}
         bad_args = {"arm": "left", "positions": {"joint_5": 0.5}}
-        good_args = {"side": "left", "positions": {"joint_5": 0.5}}
+        good_args = {"side": "left", "positions": {"joint_5": 0.5}, "velocity_limit_rad_s": 0.4}
         args = good_args if "failed_trace" in payload else bad_args
         return {
             "goal": payload["user_request"],

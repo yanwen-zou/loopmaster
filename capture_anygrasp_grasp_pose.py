@@ -96,9 +96,10 @@ def main() -> int:
     )
     parser.add_argument("--execute-move-arm-ee", action="store_true", help="Actually command the right arm after IK. Default only computes IK/dry-run action.")
     parser.add_argument("--post-move-observe-s", type=float, default=1.0, help="Seconds to wait before reading right-arm positions after an executed move.")
-    parser.add_argument("--move-max-joint-step", type=float, default=0.05, help="Maximum joint delta per move_arm_ee waypoint, in radians. Set <=0 to send one command.")
-    parser.add_argument("--move-step-dt", type=float, default=0.08, help="Seconds between move_arm_ee joint waypoints.")
-    parser.add_argument("--move-hold-s", type=float, default=0.0, help="Seconds to hold after the final move_arm_ee waypoint.")
+    parser.add_argument("--move-velocity-limit-rad-s", type=float, default=0.8, help="Per-command arm joint velocity limit passed to move_arm_ee.")
+    parser.add_argument("--move-max-joint-step", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--move-step-dt", type=float, default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--move-hold-s", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument("--fixed-orientation-cost", type=float, default=0.1, help="IK orientation cost used to preserve current EE rotation when --target-rotation fixed.")
     parser.add_argument("--skip-grasp-sequence", action="store_true", help="After reaching target, skip open/down/close/up grasp sequence.")
     parser.add_argument("--grasp-sequence-sleep-s", type=float, default=2.0, help="Seconds to sleep between grasp sequence actions.")
@@ -246,9 +247,7 @@ def main() -> int:
             "input_frame": "arm",
             "pose": target_pose,
             "execute": bool(args.execute_move_arm_ee),
-            "max_joint_step": float(args.move_max_joint_step),
-            "step_dt": float(args.move_step_dt),
-            "hold_s": float(args.move_hold_s),
+            "velocity_limit_rad_s": float(args.move_velocity_limit_rad_s),
             "orientation_cost": float(args.fixed_orientation_cost) if args.target_rotation == "fixed" else 0.1,
             "preserve_current_orientation": args.target_rotation == "fixed",
         }
@@ -509,9 +508,7 @@ def _move_right_to_target(
         "input_frame": "arm",
         "pose": _move_arm_ee_pose_from_target(target, args.target_rotation),
         "execute": True,
-        "max_joint_step": float(args.move_max_joint_step),
-        "step_dt": float(args.move_step_dt),
-        "hold_s": float(args.move_hold_s),
+        "velocity_limit_rad_s": float(args.move_velocity_limit_rad_s),
         "orientation_cost": float(args.fixed_orientation_cost) if args.target_rotation == "fixed" else 0.1,
         "preserve_current_orientation": args.target_rotation == "fixed",
         "current_positions": dict(current_positions),

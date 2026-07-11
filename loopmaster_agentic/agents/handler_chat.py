@@ -176,24 +176,82 @@ def format_handler_reply(result: RunResult) -> str:
         if any("failure trace returned to strategist" in str(note) for note in result.notes):
             lines.append("过程中有一次可修复的 skill 调用失败，已自动重规划并继续执行。")
     else:
-        root_cause = str(review.get("root_cause") or "任务没有完成")
-        lines = [f"这轮没有完成：{root_cause}。"]
-        failed_steps = [step for step in result.trace if not step.ok]
-        if failed_steps:
-            lines.append("失败点：")
-            lines.extend(f"- {_trace_step_detail(step)}" for step in failed_steps[:3])
-        research_questions = review.get("research_questions") or []
-        if research_questions:
-            lines.append("还需要你补充：")
-            lines.extend(f"- {item}" for item in research_questions)
-        next_action = str(review.get("next_action") or "")
-        if next_action:
-            lines.append(f"下一步：{next_action}")
+        lines = _failure_summary(result)
     lines.append("")
     lines.append(f"工作区：`{result.workspace}`")
     if verdict != "done":
         lines.append(f"状态：`{verdict}`")
     return "\n".join(lines)
+
+
+def _failure_summary(result: RunResult) -> list[str]:
+    failed_steps = [step for step in result.trace if not step.ok]
+    if failed_steps:
+        first = failed_steps[0]
+        lines = [_failed_step_sentence(first)]
+    else:
+        lines = ["这轮还不能确认任务已经完成。"]
+
+    research_questions = result.review.get("research_questions") or []
+    if research_questions:
+        lines.append("还需要补充这些信息：" + "；".join(str(item) for item in research_questions[:3]) + "。")
+
+    next_action = _friendly_next_action(result)
+    if next_action:
+        lines.append(next_action)
+    return lines
+
+
+def _failed_step_sentence(step: Any) -> str:
+    skill = str(getattr(step, "skill", "") or "某个步骤")
+    error = ""
+    result = getattr(step, "result", {})
+    if isinstance(result, dict):
+        error = str(result.get("error") or "")
+    friendly_error = _friendly_error(error)
+    if friendly_error:
+        return f"这轮没有完成，卡在 `{skill}`：{friendly_error}。"
+    return f"这轮没有完成，卡在 `{skill}`，这个步骤没有成功返回。"
+
+
+def _friendly_error(error: str) -> str:
+    text = error.strip()
+    lowered = text.lower()
+    if not text:
+        return ""
+    if "no navigation status received" in lowered:
+        return "没有收到导航状态，所以暂时拿不到机器人在 map 里的位姿"
+    if "worker preflight returned proceed=false" in lowered or "proceed=false" in lowered:
+        return "执行前安全检查没有放行"
+    if "unknown context ref" in lowered:
+        return "计划引用了不存在的上一步结果"
+    if "file not found" in lowered or "no such file" in lowered:
+        return "找不到需要的输入文件"
+    if "side must be left or right" in lowered:
+        return "参数里的机械臂侧别不对，需要是 left 或 right"
+    if "must be numeric" in lowered:
+        return "有参数不是数字"
+    if "license" in lowered:
+        return "许可证检查没有通过或相关依赖没有准备好"
+    return _short_text(text, limit=160)
+
+
+def _friendly_next_action(result: RunResult) -> str:
+    failed_steps = [step for step in result.trace if not step.ok]
+    if failed_steps:
+        first = failed_steps[0]
+        if first.skill == "navigation":
+            return "请先确认机器人端导航栈、定位、地图和状态发布器已经启动，然后再试。"
+        if first.skill == "worker_gate":
+            return "我已经停止继续执行这条计划；需要调整计划或安全条件后再试。"
+    next_action = str(result.review.get("next_action") or "").strip()
+    if next_action and _looks_chinese(next_action):
+        return f"下一步：{next_action}"
+    return ""
+
+
+def _looks_chinese(text: str) -> bool:
+    return any("\u4e00" <= char <= "\u9fff" for char in text)
 
 
 def _trace_step_detail(step: Any) -> str:

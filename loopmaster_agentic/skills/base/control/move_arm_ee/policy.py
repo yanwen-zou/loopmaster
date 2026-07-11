@@ -1,13 +1,14 @@
 from __future__ import annotations
 
-import math
 import time
 from typing import Any
 
 from loopmaster_agentic.ik.bridge import solve_arm_ee_dict
-
-
-JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
+from loopmaster_agentic.skills.base.control.arm_motion import (
+    DEFAULT_ARM_VELOCITY_LIMIT_RAD_S,
+    JOINTS,
+    send_arm_motion,
+)
 
 
 def dispatch(context, args):
@@ -25,8 +26,12 @@ def dispatch(context, args):
         }
 
     try:
-        current_positions = _normalize_current_positions_arg(args.get("current_positions")) or _read_current_positions(context, side)
-        other_arm_positions = _normalize_current_positions_arg(args.get("other_arm_positions"))
+        other_side = "left" if side == "right" else "right"
+        current_positions = _normalize_current_positions_arg(args.get("current_positions"), side=side) or _read_current_positions(context, side)
+        other_arm_positions = _normalize_current_positions_arg(
+            args.get("other_arm_positions"),
+            side=other_side,
+        ) or _read_current_positions(context, other_side)
         orientation_cost = _orientation_cost(args, pose)
         result = solve_arm_ee_dict(
             side=side,
@@ -58,16 +63,26 @@ def dispatch(context, args):
     sent = {}
     trajectory = []
     if execute:
-        sent, trajectory = _send_limited_arm_motion(
-            context,
-            side,
-            result["positions"],
-            current_positions,
-            other_arm_positions=other_arm_positions,
-            max_joint_step=args.get("max_joint_step"),
-            step_dt=float(args.get("step_dt", 0.08)),
-            hold_s=float(args.get("hold_s", 0.0)),
-        )
+        right_target = result["positions"] if side == "right" else other_arm_positions
+        left_target = result["positions"] if side == "left" else other_arm_positions
+        current_right = current_positions if side == "right" else other_arm_positions
+        current_left = current_positions if side == "left" else other_arm_positions
+        try:
+            sent, trajectory = send_arm_motion(
+                context,
+                right=right_target,
+                left=left_target,
+                current_right=current_right,
+                current_left=current_left,
+                velocity_limit_rad_s=args.get("velocity_limit_rad_s", args.get("arm_velocity_limit_rad_s")),
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"arm motion failed: {type(exc).__name__}: {exc}"}
+        settle_s = float(args.get("settle_s", 0.0) or 0.0)
+        if settle_s > 0.0:
+            time.sleep(settle_s)
+    else:
+        settle_s = 0.0
 
     return {
         "ok": True,
@@ -77,95 +92,29 @@ def dispatch(context, args):
         "positions": result["positions"],
         "action_sent": sent,
         "trajectory": trajectory,
+        "settle_s": settle_s,
         "target_arm_pose": result["target_arm_pose"],
         "target_camera_pose": result["target_camera_pose"],
         "transform": result["transform"],
         "ik_info": result["ik_info"],
         "orientation_cost": orientation_cost,
+        "velocity_limit_rad_s": args.get(
+            "velocity_limit_rad_s",
+            args.get("arm_velocity_limit_rad_s", DEFAULT_ARM_VELOCITY_LIMIT_RAD_S),
+        ),
     }
 
 
-def _send_limited_arm_motion(
-    context,
-    side: str,
-    target_positions: dict[str, float],
-    current_positions: dict[str, float] | None,
-    *,
-    other_arm_positions: dict[str, float] | None,
-    max_joint_step: Any,
-    step_dt: float,
-    hold_s: float,
-) -> tuple[dict[str, float], list[dict[str, Any]]]:
-    target = {joint: float(target_positions[joint]) for joint in JOINTS if joint in target_positions}
-    current = _joint_positions_or_none(current_positions)
-    max_step = float(max_joint_step) if max_joint_step is not None else 0.0
-    if current is None or max_step <= 0.0:
-        return _send_arm_positions(context, side, target, other_arm_positions), []
-
-    max_delta = max(abs(target[joint] - current[joint]) for joint in target if joint in current)
-    steps = max(1, int(math.ceil(max_delta / max(max_step, 1e-9))))
-    trajectory = []
-    sent = {}
-    step_dt = max(float(step_dt), 0.0)
-    hold_s = max(float(hold_s), 0.0)
-    for index in range(1, steps + 1):
-        alpha = index / steps
-        waypoint = {
-            joint: current[joint] + (target[joint] - current[joint]) * alpha
-            for joint in target
-            if joint in current
-        }
-        sent = _send_arm_positions(context, side, waypoint, other_arm_positions)
-        trajectory.append({"index": index, "steps": steps, "positions": waypoint, "action_sent": sent})
-        if index < steps and step_dt > 0.0:
-            time.sleep(step_dt)
-    if hold_s > 0.0:
-        time.sleep(hold_s)
-    return sent, trajectory
-
-
-def _send_arm_positions(
-    context,
-    side: str,
-    positions: dict[str, float],
-    other_arm_positions: dict[str, float] | None = None,
-) -> dict[str, float]:
-    if other_arm_positions is not None:
-        other_side = "left" if side == "right" else "right"
-        if hasattr(context.platform, "command_arms"):
-            kwargs = {
-                side: positions,
-                other_side: other_arm_positions,
-            }
-            return context.platform.command_arms(**kwargs)
-        action = {
-            **{f"{side}_{joint}.pos": value for joint, value in positions.items()},
-            **{f"{other_side}_{joint}.pos": value for joint, value in other_arm_positions.items()},
-        }
-        return context.platform.send_action(action)
-    if hasattr(context.platform, "command_arm"):
-        return context.platform.command_arm(side, positions)
-    return context.platform.send_action({f"{side}_{joint}.pos": value for joint, value in positions.items()})
-
-
-def _joint_positions_or_none(raw: dict[str, float] | None) -> dict[str, float] | None:
-    if raw is None:
-        return None
-    out = {}
-    for joint in JOINTS:
-        if joint not in raw:
-            return None
-        out[joint] = float(raw[joint])
-    return out
-
-
-def _normalize_current_positions_arg(raw: Any) -> dict[str, float] | None:
+def _normalize_current_positions_arg(raw: Any, *, side: str | None = None) -> dict[str, float] | None:
     if raw is None:
         return None
     if isinstance(raw, dict):
         out = {}
         for joint in JOINTS:
-            value = raw.get(joint, raw.get(f"{joint}.pos"))
+            keys = [joint, f"{joint}.pos"]
+            if side is not None:
+                keys = [f"{side}_{joint}.pos", f"{side}_{joint}", *keys]
+            value = next((raw[key] for key in keys if key in raw), None)
             if value is None:
                 return None
             out[joint] = float(value)
@@ -214,9 +163,12 @@ def _pose_from_args(args: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _read_current_positions(context, side: str) -> dict[str, float] | None:
-    if not hasattr(context.platform, "read_arm_positions"):
+    if hasattr(context.platform, "read_arm_positions"):
+        raw = context.platform.read_arm_positions(side)
+    elif hasattr(context.platform, "observe"):
+        raw = getattr(context.platform.observe(), "state", {}) or {}
+    else:
         return None
-    raw = context.platform.read_arm_positions(side)
     out: dict[str, float] = {}
     prefix = f"{side}_"
     for key, value in dict(raw).items():

@@ -12,9 +12,8 @@ args:
   current_positions: object
   other_arm_positions: object
   preserve_current_orientation: bool
-  max_joint_step: float
-  step_dt: float
-  hold_s: float
+  velocity_limit_rad_s: float
+  settle_s: float
 ---
 
 # Move Arm End Effector
@@ -45,17 +44,21 @@ Pass `execute=false` to compute and return the IK joint targets without moving
 hardware.
 
 Before executing physical end-effector motion after connecting the arms,
-initialize both arms with `move_arm_joints` using
-`loopmaster_agentic/config/arm_init_pose.json`. This should be the first arm
-command in grasp/move-arm plans. After that initialization, pass the same
-normalized init pose as `current_positions` for the moving arm and as
+initialize both arms with the registered `init_arms` skill. This should be the
+first arm command in grasp/move-arm plans. After that initialization, pass the
+same normalized init pose as `current_positions` for the moving arm and as
 `other_arm_positions` for the non-moving arm so IK starts from the initialized
 configuration and every executed trajectory holds the other arm in place. This
-matches the initialization flow in `capture_anygrasp_grasp_pose.py`.
+matches the initialization flow in `capture_anygrasp_grasp_pose.py` while
+keeping the fixed initialization behind a registered, limit-checked skill.
 
 Pass `current_positions` to seed IK and joint-step limiting from a known pose.
-Pass `other_arm_positions` to include the non-moving arm in each executed
-command, keeping it at the provided joint targets while this arm moves.
+The value may be either an unprefixed arm joint dict or a full observed state
+with keys like `right_joint_1.pos`. Pass `other_arm_positions` to include the
+non-moving arm in each executed command, keeping it at the provided joint
+targets while this arm moves. If `other_arm_positions` is omitted, the skill
+reads the current non-moving arm state and holds it; it must not send zeros for
+unspecified joints.
 Pass `preserve_current_orientation=true` to keep the current end-effector
 rotation relative to the arm base while solving for a new translation.
 
@@ -63,10 +66,13 @@ For hardware safety, target poses are clipped after conversion into the target
 arm base frame so the requested end-effector z is never below `0.06` meters.
 The returned `ik_info` reports whether clipping happened.
 
-Runtime speed control is implemented at the skill layer because the HEI ReBot
-Lift arm command API does not expose a per-command velocity argument. The local
-driver has a robot-config-level `arm_velocity_limit_rad_s`, but remote
-`command_arm`/`send_action` only accepts joint position targets. Pass
-`max_joint_step` in radians to split the IK target into intermediate joint
-waypoints, with `step_dt` seconds between waypoints and optional final
-`hold_s`.
+Runtime speed control uses the HEI ReBot arm velocity interface. Pass
+`velocity_limit_rad_s` to set the per-command arm joint velocity limit. The
+default is `0.8` rad/s. The skill sends one target command with that velocity
+limit; it does not insert intermediate waypoints.
+
+Every physical end-effector command needs timing semantics. Use
+`velocity_limit_rad_s` for movement speed and pass `settle_s` when downstream
+steps rely on the reached pose. Do not emit several end-effector commands
+back-to-back with no duration or settling window; send one target, wait/observe,
+then continue.

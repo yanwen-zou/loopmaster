@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import json
 import sys
 import time
@@ -23,7 +24,7 @@ ARM_POSITION_LIMITS_RAD = {
         "joint_4": (-1.4, 1.57),
         "joint_5": (-1.57, 1.57),
         "joint_6": (-3.14, 3.14),
-        "gripper": (-4.5, 0.0),
+        "gripper": (-5.0, 0.0),
     },
     "left": {
         "joint_1": (-1.5, 0.3),
@@ -32,10 +33,11 @@ ARM_POSITION_LIMITS_RAD = {
         "joint_4": (-1.4, 1.57),
         "joint_5": (-1.57, 1.57),
         "joint_6": (-3.14, 3.14),
-        "gripper": (-4.5, 0.0),
+        "gripper": (-5.0, 0.0),
     },
 }
 CHASSIS_KEYS = {"x.vel", "y.vel", "theta.vel"}
+INVERT_HARDWARE_CHASSIS_XY = True
 LIFT_KEYS = {"height.pos"}
 ARM_KEYS = {f"{side}_{joint}.pos" for side in ARM_SIDES for joint in ARM_JOINTS}
 CONTROL_KEYS = {*CHASSIS_KEYS, *LIFT_KEYS, *ARM_KEYS}
@@ -114,36 +116,54 @@ class HeiRebotLiftPlatform(RobotPlatform):
         clean = _clamp_action({key: float(value) for key, value in action.items() if key in CONTROL_KEYS})
         if not clean:
             return {}
-        sent = self.robot.send_action(clean)
-        return {str(key): float(value) for key, value in dict(sent).items() if _is_number(value)}
+        sent = self.robot.send_action(_semantic_to_hardware_action(clean))
+        numeric = {str(key): float(value) for key, value in dict(sent).items() if _is_number(value)}
+        semantic_sent = _hardware_to_semantic_action(numeric)
+        return {key: semantic_sent.get(key, value) for key, value in clean.items()}
 
     def command_chassis(self, x: float = 0.0, y: float = 0.0, theta: float = 0.0) -> dict[str, float]:
+        requested = {"x.vel": float(x), "y.vel": float(y), "theta.vel": float(theta)}
+        hardware = _semantic_to_hardware_action(requested)
         robot = self.robot
         if hasattr(robot, "base"):
-            sent = robot.base.command_velocity(x=x, y=y, theta=theta)
-            return _numeric_dict(sent)
+            sent = robot.base.command_velocity(x=hardware["x.vel"], y=hardware["y.vel"], theta=hardware["theta.vel"])
+            return _filter_action_sent(_hardware_to_semantic_action(_numeric_dict(sent)), requested)
         if hasattr(robot, "command_chassis"):
-            sent = robot.command_chassis(x=x, y=y, theta=theta)
-            return _numeric_dict(sent)
-        return self.send_action({"x.vel": x, "y.vel": y, "theta.vel": theta})
+            sent = robot.command_chassis(x=hardware["x.vel"], y=hardware["y.vel"], theta=hardware["theta.vel"])
+            return _filter_action_sent(_hardware_to_semantic_action(_numeric_dict(sent)), requested)
+        return self.send_action(requested)
 
     def read_chassis_velocity(self) -> dict[str, float]:
         robot = self.robot
         if hasattr(robot, "base"):
-            return _numeric_dict(robot.base.read_velocity())
+            return _filter_action_sent(_hardware_to_semantic_action(_numeric_dict(robot.base.read_velocity())), {key: 0.0 for key in CHASSIS_KEYS})
         if hasattr(robot, "read_chassis_velocity"):
-            return _numeric_dict(robot.read_chassis_velocity())
+            return _filter_action_sent(_hardware_to_semantic_action(_numeric_dict(robot.read_chassis_velocity())), {key: 0.0 for key in CHASSIS_KEYS})
         return {key: float(self.observe().state.get(key, 0.0)) for key in sorted(CHASSIS_KEYS)}
 
-    def command_arm(self, side: str, positions: Mapping[str, float] | Sequence[float]) -> dict[str, float]:
+    def command_arm(
+        self,
+        side: str,
+        positions: Mapping[str, float] | Sequence[float],
+        *,
+        velocity_limit_rad_s: float | Sequence[float] | Mapping[str, float] | None = None,
+    ) -> dict[str, float]:
         side = _normalize_side(side)
         positions = _clamp_arm_positions(side, positions)
         robot = self.robot
         if hasattr(robot, "arms"):
-            sent = robot.arms.command_side(side, positions)
+            sent = _call_with_optional_velocity(
+                robot.arms.command_side,
+                {"side": side, "positions": positions},
+                velocity_limit_rad_s=velocity_limit_rad_s,
+            )
             return _numeric_dict(sent)
         if hasattr(robot, "command_arm"):
-            sent = robot.command_arm(side, positions)
+            sent = _call_with_optional_velocity(
+                robot.command_arm,
+                {"side": side, "positions": positions},
+                velocity_limit_rad_s=velocity_limit_rad_s,
+            )
             return _numeric_dict(sent)
         return self.send_action(_make_arm_action(side, positions))
 
@@ -152,6 +172,7 @@ class HeiRebotLiftPlatform(RobotPlatform):
         *,
         right: Mapping[str, float] | Sequence[float] | None = None,
         left: Mapping[str, float] | Sequence[float] | None = None,
+        velocity_limit_rad_s: float | Sequence[float] | Mapping[str, float] | None = None,
     ) -> dict[str, float]:
         if right is not None:
             right = _clamp_arm_positions("right", right)
@@ -159,10 +180,18 @@ class HeiRebotLiftPlatform(RobotPlatform):
             left = _clamp_arm_positions("left", left)
         robot = self.robot
         if hasattr(robot, "arms"):
-            sent = robot.arms.command(right=right, left=left)
+            sent = _call_with_optional_velocity(
+                robot.arms.command,
+                {"right": right, "left": left},
+                velocity_limit_rad_s=velocity_limit_rad_s,
+            )
             return _numeric_dict(sent)
         if hasattr(robot, "command_arms"):
-            sent = robot.command_arms(right=right, left=left)
+            sent = _call_with_optional_velocity(
+                robot.command_arms,
+                {"right": right, "left": left},
+                velocity_limit_rad_s=velocity_limit_rad_s,
+            )
             return _numeric_dict(sent)
         action: dict[str, float] = {}
         if right is not None:
@@ -175,13 +204,16 @@ class HeiRebotLiftPlatform(RobotPlatform):
         side = _normalize_side(side)
         position = _clamp_arm_value(side, "gripper", float(position))
         robot = self.robot
+        key = f"{side}_gripper.pos"
         if hasattr(robot, "arms"):
             sent = robot.arms.set_gripper(side, position)
-            return _numeric_dict(sent)
+            numeric = _numeric_dict(sent)
+            return {key: numeric.get(key, position)}
         if hasattr(robot, "set_gripper"):
             sent = robot.set_gripper(side, position)
-            return _numeric_dict(sent)
-        return self.send_action({f"{side}_gripper.pos": position})
+            numeric = _numeric_dict(sent)
+            return {key: numeric.get(key, position)}
+        return self.send_action({key: position})
 
     def read_arm_positions(self, side: str | None = None) -> dict[str, float]:
         robot = self.robot
@@ -261,7 +293,7 @@ def split_hei_observation(raw: dict[str, Any]) -> Observation:
         if key in CAMERA_KEYS or hasattr(value, "shape"):
             images[str(key)] = value
         elif _is_number(value):
-            state[str(key)] = float(value)
+            state[str(key)] = _hardware_to_semantic_value(str(key), float(value))
         else:
             extras[str(key)] = value
     return Observation(images=images, state=state, extras=extras)
@@ -349,6 +381,38 @@ def _ensure_lerobot_importable(explicit_src: Path | None) -> None:
 
 def _numeric_dict(values: Any) -> dict[str, float]:
     return {str(key): float(value) for key, value in dict(values).items() if _is_number(value)}
+
+
+def _filter_action_sent(sent: Mapping[str, float], requested: Mapping[str, float]) -> dict[str, float]:
+    return {key: float(sent.get(key, value)) for key, value in requested.items()}
+
+
+def _semantic_to_hardware_action(action: Mapping[str, float]) -> dict[str, float]:
+    return {str(key): _semantic_to_hardware_value(str(key), float(value)) for key, value in action.items()}
+
+
+def _hardware_to_semantic_action(action: Mapping[str, float]) -> dict[str, float]:
+    return {str(key): _hardware_to_semantic_value(str(key), float(value)) for key, value in action.items()}
+
+
+def _semantic_to_hardware_value(key: str, value: float) -> float:
+    if INVERT_HARDWARE_CHASSIS_XY and key in {"x.vel", "y.vel"}:
+        return -value
+    return value
+
+
+def _hardware_to_semantic_value(key: str, value: float) -> float:
+    if INVERT_HARDWARE_CHASSIS_XY and key in {"x.vel", "y.vel"}:
+        return -value
+    return value
+
+
+def _call_with_optional_velocity(method, kwargs: dict[str, Any], *, velocity_limit_rad_s: Any):
+    signature = inspect.signature(method)
+    accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    if velocity_limit_rad_s is not None and (accepts_kwargs or "velocity_limit_rad_s" in signature.parameters):
+        return method(**kwargs, velocity_limit_rad_s=velocity_limit_rad_s)
+    return method(**kwargs)
 
 
 def _is_number(value: Any) -> bool:

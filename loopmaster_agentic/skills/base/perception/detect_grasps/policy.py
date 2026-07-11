@@ -100,6 +100,14 @@ def dispatch(context, args):
             if region is not None:
                 source["region_point_count"] = int(region.sum())
                 source["region_point_fraction"] = float(region.sum() / max(1, points.shape[0]))
+                if _should_reject_empty_explicit_region(args, source["region_point_count"]):
+                    return {
+                        "ok": False,
+                        "error": "segmentation mask selected zero valid depth points; refusing unconstrained AnyGrasp",
+                        "status": status,
+                        "source": source,
+                        "point_count": int(points.shape[0]),
+                    }
             grasps = detector.get_grasp(points, optional_params)
             if grasps is None:
                 return {"ok": True, "status": status, "source": source, "grasp_count": 0, "grasps": []}
@@ -565,6 +573,14 @@ def _optional_params(points: Any, seg_mask: Any, args: dict[str, Any], dense_gra
         "approach_steering": approach,
         "approach_thresh": float(args.get("approach_thresh", np.pi)),
     }
+
+
+def _has_explicit_region_mask(args: dict[str, Any]) -> bool:
+    return bool(args.get("seg_mask_path") or args.get("region_mask_path"))
+
+
+def _should_reject_empty_explicit_region(args: dict[str, Any], region_point_count: int) -> bool:
+    return _has_explicit_region_mask(args) and region_point_count <= 0
 
 
 def _load_point_region_mask(args: dict[str, Any], point_count: int):

@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import time
 
-JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
+from loopmaster_agentic.skills.base.control.arm_motion import (
+    DEFAULT_ARM_VELOCITY_LIMIT_RAD_S,
+    JOINTS,
+    send_arm_motion,
+)
 
 
 def dispatch(context, args):
@@ -15,33 +20,31 @@ def dispatch(context, args):
             right, left = _dual_arm_positions(positions)
         except (TypeError, ValueError) as exc:
             return {"ok": False, "error": str(exc)}
-        if hasattr(context.platform, "command_arms"):
-            sent = context.platform.command_arms(right=right, left=left)
-        else:
-            action = {
-                **{f"right_{joint}.pos": float(value) for joint, value in right.items()},
-                **{f"left_{joint}.pos": float(value) for joint, value in left.items()},
-            }
-            sent = context.platform.send_action(action)
-        return {"ok": True, "action_sent": sent}
+        try:
+            sent, trajectory = send_arm_motion(
+                context,
+                right=right,
+                left=left,
+                velocity_limit_rad_s=args.get("velocity_limit_rad_s", args.get("arm_velocity_limit_rad_s")),
+            )
+        except Exception as exc:
+            return {"ok": False, "error": f"arm motion failed: {type(exc).__name__}: {exc}"}
+        return _result(sent, trajectory, args)
 
-    if isinstance(positions, list):
-        if len(positions) != len(JOINTS):
-            return {"ok": False, "error": f"positions list must contain {len(JOINTS)} values"}
-        action = {f"{side}_{joint}.pos": float(value) for joint, value in zip(JOINTS, positions)}
-    elif isinstance(positions, dict):
-        action = {}
-        for joint, value in positions.items():
-            if joint not in JOINTS:
-                return {"ok": False, "error": f"unknown joint: {joint}"}
-            action[f"{side}_{joint}.pos"] = float(value)
-    else:
-        return {"ok": False, "error": "positions must be a list or dict"}
-    if hasattr(context.platform, "command_arm"):
-        sent = context.platform.command_arm(side, positions)
-    else:
-        sent = context.platform.send_action(action)
-    return {"ok": True, "action_sent": sent}
+    try:
+        target = _normalize_positions(positions)
+    except (TypeError, ValueError) as exc:
+        return {"ok": False, "error": str(exc)}
+    try:
+        sent, trajectory = send_arm_motion(
+            context,
+            right=target if side == "right" else None,
+            left=target if side == "left" else None,
+            velocity_limit_rad_s=args.get("velocity_limit_rad_s", args.get("arm_velocity_limit_rad_s")),
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"arm motion failed: {type(exc).__name__}: {exc}"}
+    return _result(sent, trajectory, args)
 
 
 def _dual_arm_positions(positions):
@@ -68,3 +71,19 @@ def _normalize_positions(positions):
             out[joint] = float(value)
         return out
     raise TypeError("positions must be a list or dict")
+
+
+def _result(sent, trajectory, args):
+    settle_s = float(args.get("settle_s", 0.0) or 0.0)
+    if settle_s > 0.0:
+        time.sleep(settle_s)
+    return {
+        "ok": True,
+        "action_sent": sent,
+        "trajectory": trajectory,
+        "settle_s": settle_s,
+        "velocity_limit_rad_s": args.get(
+            "velocity_limit_rad_s",
+            args.get("arm_velocity_limit_rad_s", DEFAULT_ARM_VELOCITY_LIMIT_RAD_S),
+        ),
+    }
