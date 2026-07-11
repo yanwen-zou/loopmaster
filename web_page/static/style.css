@@ -113,7 +113,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 /* 商品栅格 */
 .section-title{display:flex;align-items:center;gap:10px;margin:24px 0 14px;font-size:18px;font-weight:800}
 .section-title::before{content:"";width:5px;height:20px;background:var(--blue);border-radius:3px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(165px,1fr));gap:16px}
+/* 自适应宽度：每列至少 145px，窄屏(手机)自然 2 列、平板 3~4 列、桌面更多 */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:14px}
 .card{
   background:var(--panel);border:1px solid var(--line);border-radius:20px;
   padding:14px;display:flex;flex-direction:column;gap:8px;

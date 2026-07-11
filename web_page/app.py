@@ -46,6 +46,8 @@ NEW_USER_COINS = 200.0       # 新用户赠送月亮币
 API_TOKEN = os.environ.get("LOOPMASTER_API_TOKEN", "").strip()
 
 app = Flask(__name__)
+# 静态文件（CSS/JS）不长期缓存：改了样式浏览器会重新拉取，避免旧样式卡住布局
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
 
 def check_token():
