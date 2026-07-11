@@ -172,8 +172,8 @@ function renderTabs(){
 function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
 function render(){
   const v=document.getElementById('view');
-  if(IDLE){ stopLoopReplay(); stopDevlog(); v.innerHTML='<div class="panel"><div class="empty">空闲中 · 暂无实时机器人运行</div></div>'; return; }
-  stopDevlog();
+  if(IDLE){ stopDevlog(); SIM_ON=true; startSim(); return; }   // 无实时运行 → 回放模拟 Agent Loop
+  stopDevlog(); SIM_ON=false;
   v.innerHTML = TAB==='overview' ? viewOverview() : viewAgent(TAB);
   if(TAB==='overview' && RUN && RUN.loop_events && RUN.loop_events.length){
     startLoopReplay(RUN.loop_events);   // 概述里动态回放四角色循环
@@ -257,7 +257,10 @@ function loopTick(){
     s.scrollTop=s.scrollHeight; setRing(e.role, e.iter||0); LOOP_I++;
   }else{
     LOOP_I++;
-    if(LOOP_I>LOOP_EVENTS.length+3){ s.innerHTML=''; LOOP_I=0; setRing(null,0); }  // 停留后重播
+    if(LOOP_I>LOOP_EVENTS.length+3){
+      if(SIM_ON){ nextSim(); }                                // 模拟模式：换下一个场景
+      else { s.innerHTML=''; LOOP_I=0; setRing(null,0); }      // 真实回放：停留后重播
+    }
   }
 }
 function loopEventHtml(e){
@@ -288,6 +291,70 @@ function loopEventHtml(e){
   }
   return `<div class="${cls}" style="--rc:var(--${role.split('.')[0]})">${head}<div class="le-body">${body}</div></div>`;
 }
+
+/* ------------ 空闲模拟：无实时机器人运行时，循环回放模拟的 Agent Loop ------------ */
+let SIM_ON=false, SIM_IDX=0;
+const SIM_LOOPS=[
+  {task:'让左手 joint5 来回摇摆 5 次（±0.5 rad）', events:[
+    {role:'handler',type:'route',title:'Handler 接收请求，分发子代理',iter:0},
+    {role:'handler',type:'connect',title:'connecting platform 连接机器人平台',iter:0},
+    {role:'strategist',type:'plan',steps:['observe','move_arm_joints ×5','stop_motion'],iter:1},
+    {role:'worker',type:'gate_block',iter:1,notes:['计划用旧 trace 的硬编码整臂数组，没用最新 observe','真实硬件上任何位姿变化都可能导致多关节意外运动','应仅将 left joint5 偏移 ±0.5 rad，其余保持 observed 值']},
+    {role:'strategist',type:'revise',title:'按安全意见修订',steps:['observe','stop_motion'],iter:1},
+    {role:'worker',type:'skill',skill:'observe',ok:true,iter:1},
+    {role:'auditor',type:'verdict',verdict:'retry',iter:1,title:'未执行摆动；fresh observe 已含所需数值，应据此生成 7 值目标'},
+    {role:'auditor',type:'skill_update',title:'新增 oscillate_arm_joint 学习技能',iter:1},
+    {role:'strategist',type:'plan',steps:['observe','oscillate_arm_joint','stop_motion'],iter:2},
+    {role:'worker',type:'skill',skill:'observe',ok:true,iter:2},
+    {role:'worker',type:'skill',skill:'oscillate_arm_joint',ok:true,iter:2},
+    {role:'worker',type:'skill',skill:'stop_motion',ok:true,iter:2},
+    {role:'auditor',type:'verdict',verdict:'done',iter:2,title:'joint5 完成 5 次摆动并回到起点，闭环安全收尾'},
+    {role:'handler',type:'final',verdict:'done',iter:2,title:'任务完成',next:'—'},
+  ]},
+  {task:'从货篮取出可口可乐并递给顾客', events:[
+    {role:'handler',type:'route',title:'Handler 接收下单任务',iter:0},
+    {role:'strategist',type:'plan',steps:['observe','scan_basket','set_lift_height','move_arm_joints','set_gripper','stop_motion'],iter:1},
+    {role:'worker',type:'skill',skill:'observe',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'scan_basket',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'move_arm_joints',ok:true,iter:1},
+    {role:'worker.monitor',type:'skill',skill:'observe',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'set_gripper',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'stop_motion',ok:true,iter:1},
+    {role:'auditor',type:'verdict',verdict:'done',iter:1,title:'可乐已交付顾客，所有动作有据可依'},
+    {role:'handler',type:'final',verdict:'done',iter:1,title:'交付完成',next:'—'},
+  ]},
+  {task:'补货：把 3 瓶农夫山泉摆到货架', events:[
+    {role:'handler',type:'route',title:'Handler 接收补货任务',iter:0},
+    {role:'strategist',type:'plan',steps:['observe','scan_basket','set_gripper','move_arm_joints'],iter:1},
+    {role:'worker',type:'gate_block',iter:1,notes:['夹爪闭合位来自旧参数，未按当前瓶径校准','闭合力不足在真实硬件上会掉落','应先 observe 瓶位，再据此设夹爪闭合位']},
+    {role:'strategist',type:'revise',title:'按安全意见修订',steps:['observe','scan_basket','set_gripper','move_arm_joints'],iter:1},
+    {role:'worker',type:'skill',skill:'observe',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'set_gripper',ok:true,iter:1},
+    {role:'worker',type:'skill',skill:'move_arm_joints',ok:false,iter:1,error:'gripper slip: bottle #2 dropped'},
+    {role:'worker',type:'skill',skill:'stop_motion',ok:true,iter:1},
+    {role:'auditor',type:'verdict',verdict:'retry',iter:1,title:'第 2 瓶滑脱，夹持力不足'},
+    {role:'auditor',type:'skill_update',title:'调高夹爪闭合位并重试',iter:1},
+    {role:'handler',type:'final',verdict:'retry',iter:1,title:'部分完成，需重试',next:'提高夹爪闭合位后重试补货'},
+  ]},
+];
+function simRing(){
+  return ['handler','strategist','worker','auditor'].map((k,i)=>
+    `<div class="lr-node" id="lrn-${k}" style="--rc:var(--${k})"><span class="lr-ic">${ROLE_ICON[k]}</span><span class="lr-nm">${ROLE_CN[k].split(' ')[1]}</span></div>`
+    +(i<3?'<span class="lr-arrow">→</span>':'<span class="lr-arrow lr-loop">↺</span>')).join('');
+}
+function startSim(){
+  const v=document.getElementById('view'); if(!v) return;
+  const scn=SIM_LOOPS[SIM_IDX % SIM_LOOPS.length];
+  v.innerHTML=`<div class="panel loop-card">
+    <h3><span class="bar"></span>🔁 Agent Loop 模拟回放
+      <span class="lr-iter" id="lrIter" style="background:rgba(52,211,153,.14);color:var(--ok)">🟢 演示 · 无实时运行</span></h3>
+    <div style="font-size:13px;color:var(--muted);margin:2px 0 12px">🎯 ${esc(scn.task)}</div>
+    <div class="lr-ring">${simRing()}</div>
+    <div class="lr-stream" id="loopStream"></div>
+  </div>`;
+  startLoopReplay(scn.events);
+}
+function nextSim(){ SIM_IDX++; startSim(); }
 
 /* 开发日志已移至「关于我们」页；此处仅保留 stopDevlog 供 render 调用 */
 let DEV_TIMER=null;

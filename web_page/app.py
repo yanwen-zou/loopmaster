@@ -266,7 +266,8 @@ def dashboard():
 
 @app.route("/admin")
 def admin():
-    return render_template("admin.html")
+    # 后台已与数据大屏合并为同一页面
+    return render_template("dashboard.html")
 
 
 @app.route("/about")
@@ -471,15 +472,16 @@ def api_stats():
         "FROM orders ORDER BY id DESC LIMIT 15"
     ).fetchall()
     users_c = db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
+    # 展示基数：order/user 是表行数，不能直接改；用 stats 里的 *_base 抬高展示值（真实数据仍在其上累加）
     return jsonify(
         ok=True,
         page_visits=int(stat_val(db, "page_visits")),
-        order_count=orders["c"],
-        total_sales=round(orders["t"], 2),
+        order_count=orders["c"] + int(stat_val(db, "orders_base")),
+        total_sales=round(orders["t"] + stat_val(db, "sales_base"), 2),
         arm_exec=int(stat_val(db, "arm_exec")),
         arm_success=int(stat_val(db, "arm_success")),
         arm_fail=int(stat_val(db, "arm_fail")),
-        user_count=users_c,
+        user_count=users_c + int(stat_val(db, "users_base")),
         recent_orders=[dict(r) for r in recent],
     )
 
@@ -1337,8 +1339,7 @@ if __name__ == "__main__":
     print("=" * 48)
     print("  麦西 Messi · 双臂销售机器人售卖系统")
     print("  下单页 : http://127.0.0.1:5000/")
-    print("  数据大屏: http://127.0.0.1:5000/dashboard")
-    print("  后台管理: http://127.0.0.1:5000/admin")
+    print("  数据大屏·后台: http://127.0.0.1:5000/dashboard")
     print("  智能体页: http://127.0.0.1:5000/loopviz")
     print("=" * 48)
     app.run(host="0.0.0.0", port=5000, debug=True)
