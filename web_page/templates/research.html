@@ -62,7 +62,11 @@ code,.mono{font-family:"JetBrains Mono","SF Mono",Consolas,monospace}
 .arw{display:flex;align-items:center;justify-content:center;width:30px;color:#9fb0cc;font-size:20px;font-weight:800;flex:0 0 auto}
 .loopback{text-align:center;font-size:12.5px;color:var(--muted);margin-top:14px}
 .loopback b{color:var(--strategist)}
-@media(max-width:720px){.arw{width:100%;height:22px;transform:rotate(90deg)}}
+@media(max-width:720px){
+  .loop{flex-direction:column}
+  .rnode{width:100%;flex:none}
+  .arw{width:100%;height:24px;transform:rotate(90deg)}
+}
 
 /* 章节 */
 section{padding:30px 0;border-top:1px solid var(--line)}
@@ -118,6 +122,30 @@ pre.bib{background:#0f1e3d;color:#dce6ff;border-radius:14px;padding:18px 18px;ov
 .foot a{margin:0 8px}
 .disc{font-size:12px;color:#8a97ad;background:#fbfcff;border:1px dashed var(--line);border-radius:12px;
   padding:12px 14px;margin-top:12px}
+
+/* ===== 手机适配 ===== */
+@media(max-width:600px){
+  .wrap{padding:0 15px}
+  .nav{padding:10px 14px;flex-wrap:wrap;gap:6px 10px}
+  .nav a{font-size:13px}
+  .hero{padding:34px 0 22px}
+  .hero .badge{font-size:11px;letter-spacing:.5px;padding:4px 12px}
+  .hero h1{font-size:23px;line-height:1.3}
+  .hero .sub{font-size:14.5px}
+  .authors{font-size:14px}
+  .btns a{font-size:13px;padding:9px 15px}
+  .teaser{padding:16px 13px;border-radius:16px}
+  section{padding:24px 0}
+  h2{font-size:20px}
+  h2::before{height:20px}
+  h3{font-size:15px}
+  p,.lead,ul.clean li{font-size:14.5px}
+  .abstract{padding:18px 16px}
+  .contrib{padding:14px 15px}
+  table{font-size:12px;min-width:560px}
+  th,td{padding:9px 10px}
+  pre.bib{font-size:10.5px;padding:14px}
+}
 </style>
 </head>
 <body>
