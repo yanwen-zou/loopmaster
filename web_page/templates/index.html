@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>麦西 Messi · 自助售卖</title>
 <link rel="icon" type="image/png" href="/static/logo.png">
-<link rel="stylesheet" href="/static/style.css?v=20260711f">
+<link rel="stylesheet" href="/static/style.css?v=20260711g">
 </head>
 <body>
 <div class="topbar">
@@ -77,6 +77,10 @@
       <div class="m-emoji arm-anim">🦾</div>
       <div class="m-name">机械臂抓取中…</div>
       <div class="m-title" id="mGrabName">正在抓取商品</div>
+      <div id="mGrabActions" style="display:none;margin-top:18px">
+        <div class="m-title" style="margin-bottom:10px">取到商品后点「确定取走」即可完成付款</div>
+        <div class="m-actions"><button class="btn" onclick="confirmPickup()">✅ 确定取走</button></div>
+      </div>
     </div>
     <!-- 3. 结果视图 -->
     <div id="mResult" class="hidden">
@@ -282,6 +286,7 @@ async function confirmItem(){
 
   BUSY = true;
   document.getElementById('mGrabName').textContent = `正在抓取 ${p.emoji}${p.name} ×${MODAL_QTY}`;
+  document.getElementById('mGrabActions').style.display = 'none';   // 默认不显示确认按钮
   showState('grab');
   await sleep(900);   // 让"机械臂抓取中"动画呈现
 
@@ -297,10 +302,12 @@ async function confirmItem(){
 
   if(!d.ok){ showState('confirm'); toast(d.msg||'下单失败', 'err'); return; }
 
-  // 真机模式：下单只建任务，不弹「确定取走」——原地等待 agent 上报完成后再显示结果并结算
+  // 真机模式：下单只建任务，原地等待 agent 上报完成；同时给「确定取走」按钮，
+  // 顾客取到货可手动完成（自定义商品 agent 无法履约时的兜底），120s 服务器也会自动结算
   if(d.status === 'pending'){
     document.getElementById('mGrabName').textContent =
-      `机械臂正在为你取货 ${p.emoji}${p.name} ×${MODAL_QTY}，等待完成…`;
+      `机械臂正在为你取货 ${p.emoji}${p.name} ×${MODAL_QTY}…`;
+    document.getElementById('mGrabActions').style.display = 'block';
     showState('grab');
     pollOrder(d.order_id);
     loadProducts();
@@ -327,31 +334,57 @@ async function confirmItem(){
 let WAIT_ORDER = null, WAIT_TIMER = null, IN_PICKUP = false;
 function stopWait(){ if(WAIT_TIMER){ clearInterval(WAIT_TIMER); WAIT_TIMER=null; } }
 
+function showResult(icon, title, html){
+  document.getElementById('rIcon').textContent = icon;
+  document.getElementById('rTitle').textContent = title;
+  document.getElementById('rDetail').innerHTML = html;
+  showState('result');
+}
+
 function pollOrder(oid){
   stopWait();
   WAIT_ORDER = oid;
-  IN_PICKUP = true;   // 等待期间禁止关闭弹窗
+  IN_PICKUP = true;   // 等待期间禁止关闭弹窗（改用「确定取走」按钮退出）
   WAIT_TIMER = setInterval(async ()=>{
     let d;
     try{ d = await (await fetch('/api/order/status?order_id=' + oid)).json(); }
-    catch(e){ return; }               // 网络抖动：下次轮询再试
-    if(!d.ok || !d.settled) return;   // 仍在等待 agent 完成
+    catch(e){ return; }                       // 网络抖动：下次轮询再试
+    if(d && d.ok === false){                   // 订单被删/不存在 → 结束等待，允许关闭
+      stopWait(); IN_PICKUP = false;
+      showResult('⚠️', '订单已结束', ''); return;
+    }
+    if(!d || !d.settled) return;               // 仍在等待完成（服务器 120s 会自动结算兜底）
     stopWait(); IN_PICKUP = false;
     if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
     const a = d.arm || {};
-    const rIcon = document.getElementById('rIcon');
-    const rTitle = document.getElementById('rTitle');
-    if(d.order_status==='success'){ rIcon.textContent='✅'; rTitle.textContent='取货完成'; }
-    else if(d.order_status==='partial'){ rIcon.textContent='⚠️'; rTitle.textContent='部分完成'; }
-    else { rIcon.textContent='❌'; rTitle.textContent='取货失败'; }
-    document.getElementById('rDetail').innerHTML =
+    const ok = d.order_status === 'success', part = d.order_status === 'partial';
+    showResult(ok?'✅':(part?'⚠️':'❌'), ok?'取货完成':(part?'部分完成':'取货失败'),
       (a.exec ? `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` : '') +
       (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
-                : '本次未扣款') +
-      '<br>感谢惠顾，机器人已完成 🦾';
-    showState('result');
+                : '本次未扣款') + '<br>感谢惠顾，机器人已完成 🦾');
     loadProducts();
   }, 2000);
+}
+
+// 顾客手动「确定取走」：立即结算(扣款+扣库存+收回)，不用等 agent —— 自定义商品兜底
+async function confirmPickup(){
+  if(!WAIT_ORDER) return;
+  const oid = WAIT_ORDER;
+  const btn = document.querySelector('#mGrabActions .btn');
+  if(btn){ btn.disabled = true; btn.textContent = '结算中…'; }
+  stopWait();
+  let d;
+  try{ d = await (await fetch('/api/order/confirm', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({order_id: oid})})).json(); }
+  catch(e){ d = {ok:false, msg:'网络错误'}; }
+  if(btn){ btn.disabled = false; btn.textContent = '✅ 确定取走'; }
+  if(!d.ok){ toast(d.msg||'确认失败', 'err'); pollOrder(oid); return; }   // 失败则继续等
+  IN_PICKUP = false;
+  if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
+  showResult('✅', '取货完成',
+    (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
+              : '本次未扣款') + '<br>感谢惠顾，机器人已收回 🦾');
+  loadProducts();
 }
 
 function closeItem(){

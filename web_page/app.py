@@ -902,6 +902,17 @@ def api_order_status():
     order = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
     if not order:
         return jsonify(ok=False, msg="订单不存在"), 404
+    # 超时兜底：pending 超过 PICKUP_TIMEOUT 秒仍未被 agent 结算，就自动结算(扣款+收回)，
+    # 避免前端一直卡在「等待完成」——尤其自定义商品 agent 无法履约时。
+    if order["status"] == "pending":
+        try:
+            waited = (datetime.now() - datetime.strptime(order["created_at"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+        except (ValueError, TypeError):
+            waited = 0
+        if waited >= PICKUP_TIMEOUT:
+            _settle_full(db, order)
+            db.commit()
+            order = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
     task = db.execute("SELECT status FROM tasks WHERE order_id=? ORDER BY id DESC LIMIT 1",
                       (oid,)).fetchone()
     u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()

@@ -330,19 +330,20 @@ function devEntryHtml(e){
 }
 function stopDevlog(){ if(DEV_TIMER){clearInterval(DEV_TIMER);DEV_TIMER=null;} }
 function startDevlog(){
-  stopDevlog(); DEV_I=0;
+  stopDevlog();
   const s=document.getElementById('devStream'); if(!s) return;
-  s.innerHTML='';
-  DEV_TIMER=setInterval(devTick, DEV_STEP_MS); devTick();
-}
-function devTick(){
-  const s=document.getElementById('devStream'); if(!s){stopDevlog();return;}
-  if(DEV_I<DEV_LOG.length){
-    s.insertAdjacentHTML('beforeend', devEntryHtml(DEV_LOG[DEV_I])); s.scrollTop=s.scrollHeight; DEV_I++;
-  }else{
-    DEV_I++;
-    if(DEV_I>DEV_LOG.length+4){ s.innerHTML=''; DEV_I=0; }   // 播完停留几秒后循环重播
-  }
+  s.innerHTML = DEV_LOG.map(devEntryHtml).join('');   // 已有开发日志一次性全部显示，不再一条条弹出
+  s.scrollTop = 0;
+  // 缓慢自动向下滚动浏览，到底停留后回到顶部循环
+  let hold = 0;
+  DEV_TIMER = setInterval(()=>{
+    const el=document.getElementById('devStream'); if(!el){stopDevlog();return;}
+    const max = el.scrollHeight - el.clientHeight;
+    if(max <= 2) return;                     // 内容不超一屏就不滚
+    if(hold > 0){ hold--; if(hold===0) el.scrollTop = 0; return; }
+    el.scrollTop += 1;
+    if(el.scrollTop >= max-1) hold = 25;     // 到底停留 ~2.5s 再回顶
+  }, 100);
 }
 
 /* ------------ 角色详情：左图表 + 右说明 ------------ */
