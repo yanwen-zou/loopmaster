@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 from pathlib import Path
 from typing import Any
 
@@ -7,6 +8,8 @@ from typing import Any
 DEFAULT_TRAY_X_MIN = 106.0
 DEFAULT_TRAY_X_MAX = 604.0
 DEFAULT_SEGMENT_COUNT = 5
+MIN_EPISODE_INDEX = 0
+MAX_EPISODE_INDEX = 4
 
 
 def dispatch(context, args):
@@ -14,6 +17,7 @@ def dispatch(context, args):
     tray_x_min = float(args.get("tray_x_min", DEFAULT_TRAY_X_MIN))
     tray_x_max = float(args.get("tray_x_max", DEFAULT_TRAY_X_MAX))
     segment_count = int(args.get("segment_count", DEFAULT_SEGMENT_COUNT))
+    fallback_index = _fallback_index(args)
     if segment_count <= 0:
         return {"ok": False, "error": "segment_count must be positive"}
     if tray_x_max <= tray_x_min:
@@ -29,7 +33,7 @@ def dispatch(context, args):
         result = {
             "ok": True,
             "ranges": ranges,
-            **_classify_mask(mask, tray_x_min, tray_x_max, segment_count),
+            **_with_episode_index(_classify_mask(mask, tray_x_min, tray_x_max, segment_count), fallback_index),
         }
         _remember(context, result)
         return result
@@ -43,7 +47,15 @@ def dispatch(context, args):
             if _has_mask_input(detection):
                 try:
                     mask = _mask_from_args(context, detection)
-                    results.append({"ok": True, **_classify_mask(mask, tray_x_min, tray_x_max, segment_count)})
+                    results.append(
+                        {
+                            "ok": True,
+                            **_with_episode_index(
+                                _classify_mask(mask, tray_x_min, tray_x_max, segment_count),
+                                fallback_index,
+                            ),
+                        }
+                    )
                 except Exception as exc:
                     results.append({"ok": False, "error": f"failed to load mask: {type(exc).__name__}: {exc}", "input": detection})
                 continue
@@ -52,7 +64,7 @@ def dispatch(context, args):
             except ValueError as exc:
                 results.append({"ok": False, "error": str(exc), "input": detection})
                 continue
-            results.append({"ok": True, **_classify_x(x, tray_x_min, tray_x_max, segment_count)})
+            results.append({"ok": True, **_with_episode_index(_classify_x(x, tray_x_min, tray_x_max, segment_count), fallback_index)})
         output = {"ok": True, "ranges": ranges, "results": results}
         _remember(context, output)
         return output
@@ -60,9 +72,15 @@ def dispatch(context, args):
     try:
         x = _x_from_args(args)
     except ValueError as exc:
-        return {"ok": False, "error": str(exc), "ranges": ranges}
+        result = {
+            "ok": True,
+            "ranges": ranges,
+            **_fallback_result(fallback_index, reason=f"{exc}; using fallback index"),
+        }
+        _remember(context, result)
+        return result
 
-    result = {"ok": True, "ranges": ranges, **_classify_x(x, tray_x_min, tray_x_max, segment_count)}
+    result = {"ok": True, "ranges": ranges, **_with_episode_index(_classify_x(x, tray_x_min, tray_x_max, segment_count), fallback_index)}
     _remember(context, result)
     return result
 
@@ -144,6 +162,45 @@ def _bbox_center_x(value: Any) -> float:
     if not isinstance(value, (list, tuple)) or len(value) < 4:
         raise ValueError("bbox must be [x1, y1, x2, y2]")
     return (float(value[0]) + float(value[2])) / 2.0
+
+
+def _with_episode_index(result: dict[str, Any], fallback_index: int) -> dict[str, Any]:
+    raw_index = result.get("index")
+    if raw_index is None:
+        return {**result, **_fallback_result(fallback_index, reason=str(result.get("reason") or "index is None"))}
+    clipped = _clip_index(raw_index)
+    out = dict(result)
+    out["index"] = clipped
+    out["episode"] = clipped
+    out["clipped"] = clipped != int(raw_index)
+    out["fallback_used"] = False
+    return out
+
+
+def _fallback_result(index: int, *, reason: str) -> dict[str, Any]:
+    clipped = _clip_index(index)
+    return {
+        "ignored": True,
+        "index": clipped,
+        "episode": clipped,
+        "fallback_used": True,
+        "clipped": clipped != int(index),
+        "reason": reason,
+    }
+
+
+def _clip_index(value: Any) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = random.randint(MIN_EPISODE_INDEX, MAX_EPISODE_INDEX)
+    return max(MIN_EPISODE_INDEX, min(MAX_EPISODE_INDEX, parsed))
+
+
+def _fallback_index(args: dict[str, Any]) -> int:
+    if "fallback_index" in args:
+        return _clip_index(args.get("fallback_index"))
+    return random.randint(MIN_EPISODE_INDEX, MAX_EPISODE_INDEX)
 
 
 def _classify_mask(mask: Any, tray_x_min: float, tray_x_max: float, segment_count: int) -> dict[str, Any]:

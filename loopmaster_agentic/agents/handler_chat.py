@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from collections.abc import Callable
 from contextlib import contextmanager
@@ -65,12 +66,14 @@ class HandlerChatSession:
         state_dir: Path | None = None,
         state_path: Path | None = None,
         history_limit: int = 12,
+        execution_lock: threading.RLock | None = None,
     ) -> None:
         self.platform = platform
         self.handler = handler or Handler()
         self.session_id = session_id
         self.state_path = state_path or handler_chat_state_path(session_id, state_dir)
         self.history_limit = history_limit
+        self.execution_lock = execution_lock
         self.last_result: RunResult | None = None
         self._messages = _load_messages(self.state_path)
 
@@ -108,7 +111,11 @@ class HandlerChatSession:
             user_message = HandlerChatMessage(role="user", content=text)
             self._append_unlocked(user_message)
 
-            result = self.handler.run(task=text, user_request=text, platform=self.platform, progress=progress)
+            if self.execution_lock is None:
+                result = self.handler.run(task=text, user_request=text, platform=self.platform, progress=progress)
+            else:
+                with self.execution_lock:
+                    result = self.handler.run(task=text, user_request=text, platform=self.platform, progress=progress)
             self.last_result = result
             content = format_handler_reply(result)
             self._append_unlocked(

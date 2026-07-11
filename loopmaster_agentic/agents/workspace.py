@@ -61,7 +61,7 @@ class Workspace:
 
     def append_trace(self, record: dict[str, Any]) -> None:
         with self.trace_path.open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(record, default=str) + "\n")
+            handle.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
 
 def new_workspace(task: str, root: Path | None = None) -> Workspace:

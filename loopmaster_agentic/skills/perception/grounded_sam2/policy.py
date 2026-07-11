@@ -171,7 +171,7 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
         },
     }
     with open(output_dir / "grounded_sam2_results.json", "w", encoding="utf-8") as f:
-        json.dump(result, f, indent=2)
+        json.dump(result, f, indent=2, ensure_ascii=False)
     return result
 
 

@@ -13,9 +13,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from loopmaster_agentic.agents.handler import Handler
-from loopmaster_agentic.agents.workspace import default_workspace_root
+from loopmaster_agentic.agents.workspace import default_workspace_root, new_workspace
 from loopmaster_agentic.core.result import RunResult
+from loopmaster_agentic.core.types import Plan, SkillCall, TraceStep
 from loopmaster_agentic.platform.base import RobotPlatform
+from loopmaster_agentic.skills.registry import SkillContext
 
 
 RUN_FILES = {
@@ -105,6 +107,9 @@ class WebServerClient:
             },
         )
 
+    def upsert_db_row(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+        return self.request("POST", f"/api/db/{table}", row)
+
     def push_run_dir(self, run_dir: Path) -> dict[str, Any]:
         files: dict[str, Any] = {}
         for name in sorted(RUN_FILES):
@@ -152,11 +157,14 @@ class ServerBridge:
         handler: Handler,
         platform: RobotPlatform,
         log: Callable[[str], None] | None = None,
+        execution_lock: threading.RLock | None = None,
     ) -> None:
         self.client = client
         self.handler = handler
         self.platform = platform
         self.log = log
+        self.execution_lock = execution_lock
+        self._locally_finished_task_ids: set[int] = set()
 
     def run_forever(self, *, once: bool = False) -> None:
         while True:
@@ -171,6 +179,10 @@ class ServerBridge:
         tasks = self.client.get_pending_tasks()
         self._log(f"poll: {len(tasks)} pending task(s)")
         for task in tasks:
+            task_id = int(task.get("id") or 0)
+            if task_id in self._locally_finished_task_ids:
+                self._log(f"task {task_id}: skipping pending task already finished locally")
+                continue
             self.process_task(task)
         return len(tasks)
 
@@ -199,22 +211,51 @@ class ServerBridge:
         return failed
 
     def process_task(self, task: dict[str, Any]) -> RunResult | None:
+        task_id = int(task.get("id") or 0)
+        if task_id in self._locally_finished_task_ids:
+            self._log(f"task {task_id}: skipping task already finished locally")
+            return None
+        if self.execution_lock is not None:
+            if not self.execution_lock.acquire(blocking=False):
+                self._log("web task pending while chat is busy; sending stop_motion before waiting for exclusive execution")
+                try:
+                    self.platform.stop_motion()
+                except Exception as exc:
+                    self._log(f"preemptive stop_motion failed: {type(exc).__name__}: {exc}")
+                self.execution_lock.acquire()
+            try:
+                return self._process_task_locked(task)
+            finally:
+                self.execution_lock.release()
+        return self._process_task_locked(task)
+
+    def _process_task_locked(self, task: dict[str, Any]) -> RunResult | None:
         task_id = int(task["id"])
         order_id = int(task["order_id"]) if task.get("order_id") is not None else None
         instruction = str(task.get("instruction") or "")
         payload_items = _payload_items(task.get("payload"))
         self._log(f"task {task_id}: claiming order={order_id} instruction={instruction}")
-        self.client.claim_task(task_id)
+        claim_status = "claimed"
+        try:
+            self.client.claim_task(task_id)
+        except RuntimeError as exc:
+            if _is_method_not_allowed_error(exc):
+                claim_status = "claim_unsupported"
+                self._log(f"task {task_id}: claim endpoint returned 405; continuing without claim")
+                self._fallback_mark_task_running(task_id=task_id)
+            else:
+                raise
         self.client.post_exec_log(
             task_id=task_id,
             order_id=order_id,
             instruction=instruction,
             status="running",
-            code="CLAIMED",
-            detail={"payload": payload_items},
+            code="CLAIMED" if claim_status == "claimed" else "CLAIM_UNSUPPORTED_CONTINUING",
+            detail={"payload": payload_items, "claim_status": claim_status},
         )
 
         def progress(event: str) -> None:
+            self._log(f"task {task_id}: {event}")
             try:
                 self.client.post_exec_log(
                     task_id=task_id,
@@ -227,16 +268,27 @@ class ServerBridge:
             except Exception:
                 pass
 
-        result = self._run_handler_with_timeout(
-            task_id=task_id,
-            order_id=order_id,
-            instruction=instruction,
-            payload_items=payload_items,
-            progress=progress,
-        )
+        if payload_items:
+            result = self._run_web_skill_chain_with_timeout(
+                task_id=task_id,
+                order_id=order_id,
+                instruction=instruction,
+                payload_items=payload_items,
+                progress=progress,
+            )
+            finish_label = "direct web skill chain"
+        else:
+            result = self._run_handler_with_timeout(
+                task_id=task_id,
+                order_id=order_id,
+                instruction=instruction,
+                payload_items=payload_items,
+                progress=progress,
+            )
+            finish_label = "handler"
         if result is None:
             return None
-        self._log(f"task {task_id}: handler finished success={result.success} workspace={result.workspace}")
+        self._log(f"task {task_id}: {finish_label} finished success={result.success} workspace={result.workspace}")
 
         run_dir = Path(result.workspace)
         self._post_run_artifact_logs(
@@ -260,20 +312,241 @@ class ServerBridge:
             )
 
         report_status = "done" if result.success else "failed"
-        self.client.report_task(
-            task_id=task_id,
-            status=report_status,
-            items=_result_delivered_items(result, payload_items),
-            arm=_arm_counts(result),
-            result={
-                "success": result.success,
-                "review": result.review,
-                "workspace": result.workspace,
-                "notes": result.notes,
-            },
-        )
+        try:
+            self.client.report_task(
+                task_id=task_id,
+                status=report_status,
+                items=_result_delivered_items(result, payload_items),
+                arm=_arm_counts(result),
+                result={
+                    "success": result.success,
+                    "review": result.review,
+                    "workspace": result.workspace,
+                    "notes": result.notes,
+                },
+            )
+        except RuntimeError as exc:
+            if _is_already_settled_error(exc):
+                self._log(f"task {task_id}: report skipped because task is already settled")
+                self._locally_finished_task_ids.add(task_id)
+                return result
+            if _is_method_not_allowed_error(exc):
+                self._log(f"task {task_id}: report endpoint returned 405; falling back to /api/db/tasks status update")
+                self._fallback_mark_task_finished(
+                    task_id=task_id,
+                    status=report_status,
+                    result={
+                        "success": result.success,
+                        "review": result.review,
+                        "workspace": result.workspace,
+                        "notes": result.notes,
+                        "fallback_report": "report endpoint returned HTTP 405; task status updated through /api/db/tasks",
+                    },
+                )
+                self._locally_finished_task_ids.add(task_id)
+                return result
+            raise
+        self._locally_finished_task_ids.add(task_id)
         self._log(f"task {task_id}: reported status={report_status}")
         return result
+
+    def _fallback_mark_task_running(self, *, task_id: int) -> None:
+        try:
+            self.client.upsert_db_row(
+                "tasks",
+                {
+                    "id": task_id,
+                    "status": "running",
+                    "agent_id": self.client.config.agent_id,
+                    "claimed_at": _server_time_string(),
+                },
+            )
+            self._log(f"task {task_id}: marked running via /api/db/tasks fallback")
+        except Exception as exc:
+            self._log(f"task {task_id}: /api/db/tasks running fallback failed: {type(exc).__name__}: {exc}")
+
+    def _fallback_mark_task_finished(self, *, task_id: int, status: str, result: dict[str, Any]) -> None:
+        try:
+            self.client.upsert_db_row(
+                "tasks",
+                {
+                    "id": task_id,
+                    "status": "done" if status in {"done", "success"} else "failed",
+                    "agent_id": self.client.config.agent_id,
+                    "result": json.dumps(result, ensure_ascii=False, default=str),
+                    "finished_at": _server_time_string(),
+                },
+            )
+            self._log(f"task {task_id}: marked finished via /api/db/tasks fallback")
+        except Exception as exc:
+            self._log(f"task {task_id}: /api/db/tasks finished fallback failed: {type(exc).__name__}: {exc}")
+
+    def _run_web_skill_chain_with_timeout(
+        self,
+        *,
+        task_id: int,
+        order_id: int | None,
+        instruction: str,
+        payload_items: list[dict[str, Any]],
+        progress: Callable[[str], None],
+    ) -> RunResult | None:
+        started_at = time.time()
+        results: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+
+        def target() -> None:
+            try:
+                result = self._run_web_skill_chain(
+                    instruction=instruction,
+                    payload_items=payload_items,
+                    progress=progress,
+                )
+            except Exception as exc:
+                results.put(("error", (exc, traceback.format_exc())))
+            else:
+                results.put(("result", result))
+
+        thread = threading.Thread(target=target, name=f"loopmaster-web-task-{task_id}", daemon=True)
+        thread.start()
+        self._log(f"task {task_id}: direct web skill chain started timeout={self.client.config.task_timeout_s:.0f}s")
+        try:
+            kind, payload = results.get(timeout=self.client.config.task_timeout_s)
+        except queue.Empty:
+            self._log(f"task {task_id}: timeout after {self.client.config.task_timeout_s:.0f}s; reporting failed")
+            try:
+                self.platform.close()
+            except Exception:
+                pass
+            run_dir = _find_workspace_for_task(self.handler, instruction, started_at)
+            if run_dir is not None:
+                self._post_run_artifact_logs(
+                    task_id=task_id,
+                    order_id=order_id,
+                    instruction=instruction,
+                    run_dir=run_dir,
+                    status="failed",
+                )
+                try:
+                    self.client.push_run_dir(run_dir)
+                except Exception as exc:
+                    self._log(f"task {task_id}: partial LoopViz push failed: {exc}")
+            self._report_failed(
+                task_id=task_id,
+                payload_items=payload_items,
+                reason=f"direct web skill chain timeout after {self.client.config.task_timeout_s:.0f}s",
+                workspace=str(run_dir) if run_dir is not None else "",
+            )
+            return None
+        if kind == "error":
+            exc, tb = payload
+            self._log(f"task {task_id}: direct web skill chain failed: {type(exc).__name__}: {exc}")
+            run_dir = _find_workspace_for_task(self.handler, instruction, started_at)
+            self.client.post_exec_log(
+                task_id=task_id,
+                order_id=order_id,
+                instruction=instruction,
+                status="failed",
+                code="DIRECT_WEB_CHAIN_EXCEPTION",
+                detail={"error": f"{type(exc).__name__}: {exc}", "traceback": tb[-4000:]},
+            )
+            self._report_failed(
+                task_id=task_id,
+                payload_items=payload_items,
+                reason=f"{type(exc).__name__}: {exc}",
+                workspace=str(run_dir) if run_dir is not None else "",
+            )
+            return None
+        return payload
+
+    def _run_web_skill_chain(
+        self,
+        *,
+        instruction: str,
+        payload_items: list[dict[str, Any]],
+        progress: Callable[[str], None],
+    ) -> RunResult:
+        item = payload_items[0] if payload_items else {}
+        target_name = str(item.get("name") or "").strip() or "object"
+        prompt = target_name if target_name.endswith(".") else f"{target_name}."
+        workspace = new_workspace(instruction, self.handler.workspace_root)
+        plan = _web_skill_chain_plan(instruction=instruction, target_prompt=prompt)
+        workspace.write_plan(plan.to_markdown())
+        trace: list[TraceStep] = []
+        context = SkillContext(platform=self.platform, workspace=workspace)
+        _attach_direct_skill_caller(context, self.handler.skills, trace, workspace)
+
+        progress("direct web skill chain connecting platform")
+        self.platform.connect()
+        try:
+            progress("direct web skill `capture_image`")
+            capture = _direct_skill_call(
+                "capture_image",
+                {"source": "d435_rgbd", "camera": "d435", "required": True},
+                "capture the current vending tray",
+                context,
+                self.handler.skills,
+                trace,
+                workspace,
+                progress,
+            )
+            if not capture.ok:
+                return _direct_web_result(instruction, workspace, plan, trace, success=False, reason="capture_image failed")
+
+            progress("direct web skill `grounded_sam2`")
+            grounded = _direct_skill_call(
+                "grounded_sam2",
+                {"text_prompt": prompt, "img_path": capture.result.get("rgb", {}).get("path")},
+                "segment the ordered object by product name",
+                context,
+                self.handler.skills,
+                trace,
+                workspace,
+                progress,
+            )
+
+            region_args: dict[str, Any] = {}
+            annotations = grounded.result.get("annotations") if isinstance(grounded.result, dict) else None
+            if grounded.ok and isinstance(annotations, list) and annotations:
+                region_args["annotation"] = annotations[0]
+            else:
+                reason = grounded.result.get("error") if isinstance(grounded.result, dict) else "no grounded_sam2 annotation"
+                progress(f"direct web skill `object_region_index` using fallback because {reason}")
+
+            progress("direct web skill `object_region_index`")
+            region = _direct_skill_call(
+                "object_region_index",
+                region_args,
+                "map segmented object to cached trajectory index",
+                context,
+                self.handler.skills,
+                trace,
+                workspace,
+                progress,
+            )
+            if not region.ok:
+                return _direct_web_result(instruction, workspace, plan, trace, success=False, reason="object_region_index failed")
+
+            episode = int(region.result.get("episode", region.result.get("index", 0)))
+            progress(f"direct web skill `play_cache_traj` episode={episode}")
+            replay = _direct_skill_call(
+                "play_cache_traj",
+                {"episode": episode, "settle_s": 1.0, "return_to_init": True, "velocity_limit_rad_s": 0.5},
+                "replay cached trajectory for selected tray index",
+                context,
+                self.handler.skills,
+                trace,
+                workspace,
+                progress,
+            )
+            return _direct_web_result(
+                instruction,
+                workspace,
+                plan,
+                trace,
+                success=bool(replay.ok),
+                reason="" if replay.ok else "play_cache_traj failed",
+            )
+        finally:
+            self.platform.close()
 
     def _run_handler_with_timeout(
         self,
@@ -397,18 +670,40 @@ class ServerBridge:
         reason: str,
         workspace: str,
     ) -> None:
-        self.client.report_task(
-            task_id=task_id,
-            status="failed",
-            items=_delivered_items(payload_items, delivered=False),
-            arm={"exec": 0, "success": 0, "fail": 1},
-            result={
-                "success": False,
-                "error": reason,
-                "workspace": workspace,
-                "timeout_s": self.client.config.task_timeout_s,
-            },
-        )
+        try:
+            self.client.report_task(
+                task_id=task_id,
+                status="failed",
+                items=_delivered_items(payload_items, delivered=False),
+                arm={"exec": 0, "success": 0, "fail": 1},
+                result={
+                    "success": False,
+                    "error": reason,
+                    "workspace": workspace,
+                    "timeout_s": self.client.config.task_timeout_s,
+                },
+            )
+        except RuntimeError as exc:
+            if _is_already_settled_error(exc):
+                self._log(f"task {task_id}: failed report skipped because task is already settled")
+                self._locally_finished_task_ids.add(task_id)
+                return
+            if _is_method_not_allowed_error(exc):
+                self._log(f"task {task_id}: failed report endpoint returned 405; falling back to /api/db/tasks status update")
+                self._fallback_mark_task_finished(
+                    task_id=task_id,
+                    status="failed",
+                    result={
+                        "success": False,
+                        "error": reason,
+                        "workspace": workspace,
+                        "timeout_s": self.client.config.task_timeout_s,
+                        "fallback_report": "report endpoint returned HTTP 405; task status updated through /api/db/tasks",
+                    },
+                )
+                self._locally_finished_task_ids.add(task_id)
+                return
+            raise
         self._log(f"task {task_id}: reported status=failed reason={reason}")
 
     def _log(self, message: str) -> None:
@@ -419,6 +714,165 @@ class ServerBridge:
 def push_run_dir(*, base_url: str, token: str, run_dir: Path) -> dict[str, Any]:
     client = WebServerClient(ServerBridgeConfig(base_url=base_url, token=token))
     return client.push_run_dir(run_dir)
+
+
+def _is_already_settled_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "HTTP 409" in text and ("任务已结算" in text or "\\u4efb\\u52a1\\u5df2\\u7ed3\\u7b97" in text)
+
+
+def _is_method_not_allowed_error(exc: BaseException) -> bool:
+    text = str(exc)
+    return "HTTP 405" in text or "Method Not Allowed" in text
+
+
+def _web_skill_chain_plan(*, instruction: str, target_prompt: str) -> Plan:
+    return Plan(
+        task=instruction,
+        goal=f"Use product name {target_prompt!r} to segment, select tray index, and replay the matching cached trajectory.",
+        steps=[
+            SkillCall(
+                "capture_image",
+                {"source": "d435_rgbd", "camera": "d435", "required": True},
+                "capture the current vending tray",
+            ),
+            SkillCall(
+                "grounded_sam2",
+                {"text_prompt": target_prompt, "img_path": {"$ref": "capture_image.rgb.path"}},
+                "segment the ordered product by web payload name",
+            ),
+            SkillCall(
+                "object_region_index",
+                {"annotation": {"$ref": "grounded_sam2.annotations.0"}},
+                "choose the cached trajectory index from mask overlap, falling back to a random episode",
+            ),
+            SkillCall(
+                "play_cache_traj",
+                {
+                    "episode": {"$ref": "object_region_index.episode"},
+                    "settle_s": 1.0,
+                    "return_to_init": True,
+                    "velocity_limit_rad_s": 0.5,
+                },
+                "replay the cached trajectory selected by object_region_index",
+            ),
+        ],
+        success_criteria=[
+            "The direct web bridge path does not invoke Handler or Strategist.",
+            "Grounded-SAM2 uses the product name from the web order payload.",
+            "object_region_index returns an episode index clipped to [0, 4].",
+            "play_cache_traj replays the selected cached trajectory.",
+        ],
+        risks=[
+            "If segmentation fails, object_region_index falls back to a random episode and the robot may grasp an arbitrary item.",
+            "This direct chain does not perform Codex planning or semantic audit before motion.",
+        ],
+        subagent_notes=["Direct web-bridge skill chain bypassed Handler and Strategist."],
+    )
+
+
+def _attach_direct_skill_caller(context: SkillContext, skills: Any, trace: list[TraceStep], workspace: Any) -> None:
+    def call_skill(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+        return _direct_skill_call(
+            name,
+            args or {},
+            "called by direct web skill chain subskill",
+            context,
+            skills,
+            trace,
+            workspace,
+            progress=None,
+            role="worker.subskill",
+        ).result
+
+    setattr(context, "call_skill", call_skill)
+    setattr(context, "call", call_skill)
+
+
+def _direct_skill_call(
+    name: str,
+    args: dict[str, Any],
+    why: str,
+    context: SkillContext,
+    skills: Any,
+    trace: list[TraceStep],
+    workspace: Any,
+    progress: Callable[[str], None] | None,
+    *,
+    role: str = "worker",
+) -> TraceStep:
+    if progress is not None:
+        progress(f"skill `{name}` args={args}")
+    try:
+        result = skills.dispatch(name, context, args)
+    except Exception as exc:
+        result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    if isinstance(getattr(context, "memory", None), dict):
+        context.memory[name] = result
+        context.memory.setdefault("skills", {})[name] = result
+        context.memory.setdefault("trace", []).append({"skill": name, "result": result})
+        context.memory["last_result"] = result
+    step = TraceStep(
+        index=len(trace) + 1,
+        skill=name,
+        args=dict(args),
+        result=dict(result),
+        ok=bool(result.get("ok", False)),
+        why=why,
+        role=role,
+    )
+    trace.append(step)
+    workspace.append_trace(step.to_dict())
+    if progress is not None:
+        progress(f"skill `{name}` ok={step.ok}")
+    return step
+
+
+def _direct_web_result(
+    task: str,
+    workspace: Any,
+    plan: Plan,
+    trace: list[TraceStep],
+    *,
+    success: bool,
+    reason: str,
+) -> RunResult:
+    review = {
+        "verdict": "success" if success else "failed",
+        "success": success,
+        "root_cause": "" if success else reason,
+        "next_action": "" if success else "Inspect trace.jsonl and retry after correcting the failed direct skill.",
+        "used_skills": [step.skill for step in trace],
+        "used_control_skills": [step.skill for step in trace if step.skill == "play_cache_traj"],
+        "notes": ["direct web-bridge chain bypassed Handler and Strategist"],
+    }
+    workspace.write_review(_direct_review_markdown(review))
+    workspace.write_summary(_direct_summary_markdown(plan, trace, review))
+    return RunResult(
+        task=task,
+        workspace=str(workspace.root),
+        plan=plan,
+        trace=trace,
+        review=review,
+        success=success,
+        notes=["direct web-bridge skill chain"],
+    )
+
+
+def _direct_review_markdown(review: dict[str, Any]) -> str:
+    lines = ["# Review", "", f"- verdict: {review.get('verdict')}", f"- success: {review.get('success')}"]
+    if review.get("root_cause"):
+        lines.append(f"- root_cause: {review.get('root_cause')}")
+    if review.get("next_action"):
+        lines.append(f"- next_action: {review.get('next_action')}")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _direct_summary_markdown(plan: Plan, trace: list[TraceStep], review: dict[str, Any]) -> str:
+    lines = ["# Summary", "", f"- Goal: {plan.goal}", f"- Success: {review.get('success')}", "", "## Trace"]
+    for step in trace:
+        lines.append(f"- {step.index}. `{step.skill}` ok={step.ok} why={step.why}")
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def _payload_items(payload: Any) -> list[dict[str, Any]]:
@@ -518,6 +972,10 @@ def _short_text(text: str, *, limit: int = 8000) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3] + "..."
+
+
+def _server_time_string() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_server_time(value: Any) -> float | None:

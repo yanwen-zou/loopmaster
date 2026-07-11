@@ -1,49 +1,61 @@
 ---
 name: object_region_index
 category: perception
-description: Map a Grounded-SAM object mask to one of five tray regions, indexed from right to left.
+description: Map a Grounded-SAM object mask to a cached trajectory episode index clipped to [0, 4].
 args:
   mask_path: string
   seg_mask_path: string
   region_object_id: int
   annotation: dict
   detections: list
+  fallback_index: int
   tray_x_min: float
   tray_x_max: float
   segment_count: int
 ---
 
-# Object Region Index
+# object_region_index
 
-Use this when the robot needs a coarse left/right ordering for a Grounded-SAM
-object mask on the white tray in front of it.
+Map a segmented target mask to a cached trajectory region index on the tray.
 
-The default calibration is based on
-`_runs/拍一张你当前看到的图片-20260711-140306-1f82c5/artifacts/current_view_rgb.png`:
-the white tray's useful width spans approximately `x=106` to `x=604` in a
-640-pixel-wide RGB image. The skill divides that tray width into five equal
-horizontal regions.
+## Purpose
 
-Index order is right-to-left:
+Use this skill after a perception skill has produced a segmentation mask for the specific target object. The returned `index`/`episode` is intended to be passed to `play_cache_traj.episode`, and is always clipped to the cached trajectory range `[0, 4]`.
 
-- `0`: rightmost object region
-- `1`: second from right
-- `2`: center object region
-- `3`: second from left
-- `4`: leftmost object region
+## Arguments
 
-Anything to the left of `tray_x_min` is ignored because it is outside the white
-tray. The skill counts the mask pixels overlapping each of the five width
-regions, computes `ratio = region_mask_pixels / tray_mask_pixels`, and returns
-the top-overlap region as `index`.
+- `seg_mask_path` (string, required): Path to a segmentation mask image. This may be a label-encoded mask when paired with `region_object_id`, or a single-object binary mask when supported by the runtime.
+- `region_object_id` (integer, required for label-encoded masks): Object label id to extract from `seg_mask_path`.
+- `tray_x_min` (number, required): Left image x boundary of the tray region.
+- `tray_x_max` (number, required): Right image x boundary of the tray region.
+- `segment_count` (integer, required): Number of tray segments. For cached trajectories this is normally 5.
+- `fallback_index` (integer, optional): Episode to use when the mask cannot determine a region. When omitted, a random episode in `[0, 4]` is selected. Explicit values are clipped to `[0, 4]`.
 
-Preferred inputs:
+## Result Contract
 
-- `mask_path`: a single binary Grounded-SAM mask such as `mask_001.png`
-- `annotation`: one Grounded-SAM annotation dict containing `mask_path`
-- `seg_mask_path` + `region_object_id`: a combined label mask plus object id
-- `detections`: a batch of dicts using any of the above forms
+The result always includes a motion-ready cached trajectory index:
 
-The result includes `index`, `top_overlap`, all per-region `overlaps`,
-`mask_area_pixels`, and `tray_mask_area_pixels`. `x` and `bbox` are still
-accepted as a fallback, but mask overlap is the intended behavior.
+- `ok == true`
+- `index` is an integer from `0` to `4`
+- `episode` equals `index`
+- `fallback_used` is `false` when mask evidence selected the region
+- `fallback_used` is `true` when the skill could not determine a region and used `fallback_index`
+
+When mask evidence is available, the result also includes `top_overlap`, all per-region `overlaps`, `mask_area_pixels`, and `tray_mask_area_pixels`.
+
+If the mask is empty, the selected `region_object_id` is absent, the target has no pixels inside the tray bounds, no mask/x input is provided, or the skill cannot determine a unique segment, it returns `fallback_used: true` and still returns a clipped `index`/`episode`. Without an explicit `fallback_index`, that fallback is random in `[0, 4]`. This lets the web bridge "grab any one" instead of blocking the order.
+
+## Required Planner Behavior
+
+- After calling this skill, pass `episode` or `index` directly to `play_cache_traj.episode`.
+- If `fallback_used` is true, treat the selected episode as arbitrary rather than perception-confirmed.
+- Prefer a per-annotation `mask_path` for the intended object when the combined `seg_mask_path` does not contain the expected `region_object_id` label.
+
+## Region Convention
+
+Tray regions are numbered from right to left in image coordinates when using the standard cached trajectory setup:
+
+- `0`: rightmost tray segment
+- `segment_count - 1`: leftmost tray segment
+
+The returned `index`/`episode` corresponds directly to `play_cache_traj.episode` for the cached pick/delivery trajectories.

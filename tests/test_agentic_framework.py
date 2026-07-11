@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 from types import SimpleNamespace
@@ -61,6 +63,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "set_lift_height",
                 "stop_motion",
                 "timer",
+                "wander",
             },
         )
         forbidden_terms = ("atomic", "zeroshot", "robotwin", "sim")
@@ -109,6 +112,54 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertIn("x must be a number", result["error"])
+
+    def test_wander_skill_samples_valid_map_goal_and_uses_navigation(self) -> None:
+        from loopmaster_agentic.skills.navigation.wander import policy
+
+        calls = []
+
+        def fake_navigation_dispatch(context, args):
+            calls.append(dict(args))
+            if args["command"] == "status":
+                return {
+                    "ok": True,
+                    "status": {
+                        "pose": {"x": -3.0, "y": -4.5, "yaw": 0.25},
+                        "navigation": {"state": "succeeded", "goal_id": "previous"},
+                    },
+                }
+            if args["command"] == "goal":
+                return {
+                    "ok": True,
+                    "command": "navigate_to_pose",
+                    "goal_id": args["goal_id"],
+                    "target": {"x": args["x"], "y": args["y"], "yaw": args["yaw"]},
+                }
+            return {"ok": False, "error": "unexpected command"}
+
+        context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("wander", root=Path("/tmp")))
+        with mock.patch.object(policy.navigation_policy, "dispatch", side_effect=fake_navigation_dispatch):
+            result = policy.dispatch(
+                context,
+                {
+                    "radius_m": 5.0,
+                    "min_radius_m": 0.5,
+                    "clearance_m": 0.25,
+                    "interval_s": 0.0,
+                    "max_goals": 1,
+                    "seed": 7,
+                    "yaw_strategy": "toward_goal",
+                    "goal_id": "wander-test",
+                },
+            )
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual([call["command"] for call in calls], ["status", "goal"])
+        sent = calls[-1]
+        self.assertEqual(sent["goal_id"], "wander-test")
+        self.assertLessEqual(math.hypot(sent["x"] + 3.0, sent["y"] + 4.5), 5.0)
+        occ_map = policy._load_map(policy.DEFAULT_MAP_YAML, free_min_value=250)
+        self.assertTrue(occ_map.is_valid_world(sent["x"], sent["y"], clearance_m=0.25))
 
     def test_hei_platform_clamps_arm_targets_to_original_limits(self) -> None:
         platform = HeiRebotLiftPlatform()
@@ -707,20 +758,9 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertEqual(result.review["verdict"], "research_needed")
             self.assertTrue(result.review["research_questions"])
 
-    def test_strategist_uses_grasp_target_learned_skill_for_web_order(self) -> None:
+    def test_strategist_uses_cache_traj_perception_chain_for_web_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            skill_dir = Path(tmp) / "skills" / "control" / "grasp_target"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\n"
-                "name: grasp_target\n"
-                "category: control\n"
-                "description: grasp target\n"
-                "---\n\n"
-                "# Grasp Target\n",
-                encoding="utf-8",
-            )
-            registry = SkillRegistry(roots=[SHIPPED_ROOT, Path(tmp) / "skills"], include_user=False)
+            registry = SkillRegistry(roots=[SHIPPED_ROOT], include_user=False)
             workspace = new_workspace("web_order_plan", root=Path(tmp) / "workspaces")
 
             plan = Strategist().plan(
@@ -733,10 +773,20 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 skills=registry,
             )
 
-        grasp_steps = [step for step in plan.steps if step.name == "grasp_target"]
-        self.assertEqual(len(grasp_steps), 1)
-        self.assertEqual(grasp_steps[0].args["target_prompt"], "可口可乐 330ml.")
-        self.assertEqual(grasp_steps[0].args["item_id"], 1)
+        names = [step.name for step in plan.steps]
+        self.assertIn("capture_image", names)
+        self.assertIn("grounded_sam2", names)
+        self.assertIn("object_region_index", names)
+        self.assertIn("play_cache_traj", names)
+        self.assertNotIn("grasp_target", names)
+        chain = [name for name in names if name in {"capture_image", "grounded_sam2", "object_region_index", "play_cache_traj"}]
+        self.assertEqual(chain, ["capture_image", "grounded_sam2", "object_region_index", "play_cache_traj"])
+        grounded = next(step for step in plan.steps if step.name == "grounded_sam2")
+        region = next(step for step in plan.steps if step.name == "object_region_index")
+        replay = next(step for step in plan.steps if step.name == "play_cache_traj")
+        self.assertEqual(grounded.args["text_prompt"], "可口可乐 330ml.")
+        self.assertEqual(region.args["annotation"], {"$ref": "grounded_sam2.annotations.0"})
+        self.assertEqual(replay.args["episode"], {"$ref": "object_region_index.index"})
         self.assertFalse(plan.research_questions)
 
     def test_server_bridge_prefers_skill_delivered_items(self) -> None:
@@ -762,6 +812,303 @@ class LoopMasterAgenticTests(unittest.TestCase):
         delivered = _result_delivered_items(result, [{"id": 1, "qty": 3}])
 
         self.assertEqual(delivered, [{"id": 1, "delivered": 1}])
+
+    def test_object_region_index_falls_back_to_random_episode(self) -> None:
+        from loopmaster_agentic.skills.perception.object_region_index import policy
+
+        context = SimpleNamespace(memory={})
+        with mock.patch.object(policy.random, "randint", return_value=3):
+            result = policy.dispatch(context, {})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["index"], 3)
+        self.assertEqual(result["episode"], 3)
+        self.assertTrue(result["fallback_used"])
+
+    def test_server_bridge_web_order_bypasses_handler_for_direct_skill_chain(self) -> None:
+        from loopmaster_agentic.server_bridge import ServerBridge, ServerBridgeConfig
+
+        class Client:
+            config = ServerBridgeConfig(base_url="http://test", task_timeout_s=5)
+
+            def __init__(self) -> None:
+                self.report = None
+
+            def claim_task(self, task_id: int) -> dict[str, Any]:
+                return {"ok": True}
+
+            def post_exec_log(self, **kwargs) -> dict[str, Any]:
+                return {"ok": True}
+
+            def push_run_dir(self, run_dir: Path) -> dict[str, Any]:
+                return {"ok": True}
+
+            def report_task(self, **kwargs) -> dict[str, Any]:
+                self.report = kwargs
+                return {"ok": True}
+
+        class Skills:
+            def __init__(self) -> None:
+                self.play_args = None
+                self.registry = SkillRegistry(include_user=False)
+
+            def dispatch(self, name: str, context: Any, args: dict[str, Any]) -> dict[str, Any]:
+                if name == "capture_image":
+                    return {"ok": True, "rgb": {"path": "/tmp/rgb.png"}}
+                if name == "grounded_sam2":
+                    return {"ok": True, "annotation_count": 0, "annotations": []}
+                if name == "object_region_index":
+                    return self.registry.dispatch(name, context, args)
+                if name == "play_cache_traj":
+                    self.play_args = dict(args)
+                    return {"ok": True, "episode": args["episode"], "sent_frames": 1}
+                return {"ok": False, "error": f"unexpected skill {name}"}
+
+        class HandlerStub:
+            workspace_root = None
+
+            def __init__(self) -> None:
+                self.skills = Skills()
+
+            def run(self, **kwargs):
+                raise AssertionError("web order should bypass Handler.run")
+
+        class Platform:
+            name = "test"
+
+            def connect(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        client = Client()
+        handler = HandlerStub()
+        bridge = ServerBridge(client=client, handler=handler, platform=Platform())
+
+        with mock.patch("loopmaster_agentic.skills.perception.object_region_index.policy.random.randint", return_value=2):
+            result = bridge.process_task(
+                {
+                    "id": 12,
+                    "order_id": 20,
+                    "instruction": "抓取「德芙巧克力」x1 交付顾客",
+                    "payload": '[{"id": 4, "name": "德芙巧克力", "qty": 1}]',
+                }
+            )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        self.assertEqual(handler.skills.play_args["episode"], 2)
+        self.assertEqual(client.report["status"], "done")
+
+    def test_server_bridge_continues_when_claim_endpoint_is_unsupported(self) -> None:
+        from loopmaster_agentic.server_bridge import ServerBridge, ServerBridgeConfig
+
+        class Client:
+            config = ServerBridgeConfig(base_url="http://test", task_timeout_s=5)
+
+            def __init__(self) -> None:
+                self.report = None
+                self.exec_codes = []
+                self.db_rows = []
+
+            def claim_task(self, task_id: int) -> dict[str, Any]:
+                raise RuntimeError("POST /api/tasks/57/claim failed with HTTP 405: Method Not Allowed")
+
+            def upsert_db_row(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+                self.db_rows.append((table, row))
+                return {"ok": True}
+
+            def post_exec_log(self, **kwargs) -> dict[str, Any]:
+                self.exec_codes.append(kwargs.get("code"))
+                return {"ok": True}
+
+            def push_run_dir(self, run_dir: Path) -> dict[str, Any]:
+                return {"ok": True}
+
+            def report_task(self, **kwargs) -> dict[str, Any]:
+                self.report = kwargs
+                return {"ok": True}
+
+        class Skills:
+            def dispatch(self, name: str, context: Any, args: dict[str, Any]) -> dict[str, Any]:
+                if name == "capture_image":
+                    return {"ok": True, "rgb": {"path": "/tmp/rgb.png"}}
+                if name == "grounded_sam2":
+                    return {"ok": True, "annotation_count": 0, "annotations": []}
+                if name == "object_region_index":
+                    return {"ok": True, "index": 1, "episode": 1, "fallback_used": True}
+                if name == "play_cache_traj":
+                    return {"ok": True, "episode": args["episode"], "sent_frames": 1}
+                return {"ok": False, "error": f"unexpected skill {name}"}
+
+        class HandlerStub:
+            workspace_root = None
+            skills = Skills()
+
+        class Platform:
+            def connect(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        client = Client()
+        bridge = ServerBridge(client=client, handler=HandlerStub(), platform=Platform())
+        result = bridge.process_task(
+            {
+                "id": 57,
+                "order_id": 65,
+                "instruction": "pick cake x1 deliver_to_customer",
+                "payload": '[{"id": 9, "name": "cake", "qty": 1}]',
+            }
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+        self.assertIn("CLAIM_UNSUPPORTED_CONTINUING", client.exec_codes)
+        self.assertEqual(client.db_rows[0][0], "tasks")
+        self.assertEqual(client.db_rows[0][1]["id"], 57)
+        self.assertEqual(client.db_rows[0][1]["status"], "running")
+        self.assertEqual(client.report["status"], "done")
+
+    def test_server_bridge_treats_already_settled_report_as_idempotent(self) -> None:
+        from loopmaster_agentic.server_bridge import ServerBridge, ServerBridgeConfig
+
+        class Client:
+            config = ServerBridgeConfig(base_url="http://test", task_timeout_s=5)
+
+            def __init__(self) -> None:
+                self.db_rows = []
+
+            def claim_task(self, task_id: int) -> dict[str, Any]:
+                return {"ok": True}
+
+            def upsert_db_row(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+                self.db_rows.append((table, row))
+                return {"ok": True}
+
+            def post_exec_log(self, **kwargs) -> dict[str, Any]:
+                return {"ok": True}
+
+            def push_run_dir(self, run_dir: Path) -> dict[str, Any]:
+                return {"ok": True}
+
+            def report_task(self, **kwargs) -> dict[str, Any]:
+                raise RuntimeError(
+                    'POST /api/tasks/35/report failed with HTTP 409: {"msg":"\\u4efb\\u52a1\\u5df2\\u7ed3\\u7b97","ok":false}'
+                )
+
+        class Skills:
+            def dispatch(self, name: str, context: Any, args: dict[str, Any]) -> dict[str, Any]:
+                if name == "capture_image":
+                    return {"ok": True, "rgb": {"path": "/tmp/rgb.png"}}
+                if name == "grounded_sam2":
+                    return {"ok": True, "annotation_count": 0, "annotations": []}
+                if name == "object_region_index":
+                    return {"ok": True, "index": 0, "episode": 0, "fallback_used": True}
+                if name == "play_cache_traj":
+                    return {"ok": True, "episode": args["episode"], "sent_frames": 1}
+                return {"ok": False, "error": f"unexpected skill {name}"}
+
+        class HandlerStub:
+            workspace_root = None
+            skills = Skills()
+
+        class Platform:
+            def connect(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        bridge = ServerBridge(client=Client(), handler=HandlerStub(), platform=Platform())
+        result = bridge.process_task(
+            {
+                "id": 35,
+                "order_id": 40,
+                "instruction": "pick bottled water x1 deliver to customer",
+                "payload": '[{"id": 6, "name": "农夫山泉 550ml", "qty": 1}]',
+            }
+        )
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.success)
+
+    def test_server_bridge_marks_report_405_finished_locally_to_avoid_repeat(self) -> None:
+        from loopmaster_agentic.server_bridge import ServerBridge, ServerBridgeConfig
+
+        class Client:
+            config = ServerBridgeConfig(base_url="http://test", task_timeout_s=5)
+
+            def __init__(self) -> None:
+                self.db_rows = []
+
+            def claim_task(self, task_id: int) -> dict[str, Any]:
+                return {"ok": True}
+
+            def upsert_db_row(self, table: str, row: dict[str, Any]) -> dict[str, Any]:
+                self.db_rows.append((table, row))
+                return {"ok": True}
+
+            def post_exec_log(self, **kwargs) -> dict[str, Any]:
+                return {"ok": True}
+
+            def push_run_dir(self, run_dir: Path) -> dict[str, Any]:
+                return {"ok": True}
+
+            def report_task(self, **kwargs) -> dict[str, Any]:
+                raise RuntimeError("POST /api/tasks/65/report failed with HTTP 405: Method Not Allowed")
+
+        class Skills:
+            def __init__(self) -> None:
+                self.replay_count = 0
+
+            def dispatch(self, name: str, context: Any, args: dict[str, Any]) -> dict[str, Any]:
+                if name == "capture_image":
+                    return {"ok": True, "rgb": {"path": "/tmp/rgb.png"}}
+                if name == "grounded_sam2":
+                    return {"ok": True, "annotation_count": 0, "annotations": []}
+                if name == "object_region_index":
+                    return {"ok": True, "index": 2, "episode": 2, "fallback_used": True}
+                if name == "play_cache_traj":
+                    self.replay_count += 1
+                    return {"ok": True, "episode": args["episode"], "sent_frames": 1}
+                return {"ok": False, "error": f"unexpected skill {name}"}
+
+        class HandlerStub:
+            workspace_root = None
+
+            def __init__(self) -> None:
+                self.skills = Skills()
+
+        class Platform:
+            def connect(self) -> None:
+                pass
+
+            def close(self) -> None:
+                pass
+
+        handler = HandlerStub()
+        client = Client()
+        bridge = ServerBridge(client=client, handler=handler, platform=Platform())
+        task = {
+            "id": 65,
+            "order_id": 70,
+            "instruction": "pick custom x1 deliver_to_customer",
+            "payload": '[{"id": 10, "name": "custom", "qty": 1}]',
+        }
+
+        first = bridge.process_task(task)
+        second = bridge.process_task(task)
+
+        self.assertIsNotNone(first)
+        self.assertTrue(first.success)
+        self.assertIsNone(second)
+        self.assertEqual(handler.skills.replay_count, 1)
+        self.assertEqual(client.db_rows[0][0], "tasks")
+        self.assertEqual(client.db_rows[0][1]["id"], 65)
+        self.assertEqual(client.db_rows[0][1]["status"], "done")
 
     def test_worker_resolves_dynamic_context_refs_between_skill_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1462,6 +1809,96 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertEqual(captured["remote_ip"], cli_module.DEFAULT_REMOTE_IP)
+
+    def test_chat_cli_tui_starts_handoff_server_without_web_poll(self) -> None:
+        class _FakeChatSession:
+            def __init__(self, **kwargs):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stop = mock.Mock()
+            with mock.patch.object(cli_module, "HandlerChatSession", _FakeChatSession), mock.patch.object(
+                cli_module, "_run_handler_chat_tui", return_value=None
+            ), mock.patch.object(cli_module, "_start_chat_handoff_server", return_value=stop) as handoff, mock.patch.object(
+                cli_module, "_start_chat_web_bridge"
+            ) as poll:
+                code = main(
+                    [
+                        "chat",
+                        "--dry-run",
+                        "--local-agents",
+                        "--state-dir",
+                        str(Path(tmp) / "state"),
+                        "--workspace-root",
+                        str(Path(tmp) / "workspaces"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(handoff.called)
+        self.assertFalse(poll.called)
+        self.assertTrue(stop.called)
+
+    def test_chat_cli_web_poll_is_explicit(self) -> None:
+        class _FakeChatSession:
+            def __init__(self, **kwargs):
+                pass
+
+        with tempfile.TemporaryDirectory() as tmp:
+            stop_event = threading.Event()
+            stop_handoff = mock.Mock()
+            with mock.patch.object(cli_module, "HandlerChatSession", _FakeChatSession), mock.patch.object(
+                cli_module, "_run_handler_chat_tui", return_value=None
+            ), mock.patch.object(cli_module, "_start_chat_handoff_server", return_value=stop_handoff), mock.patch.object(
+                cli_module, "_start_chat_web_bridge", return_value=stop_event
+            ) as start:
+                code = main(
+                    [
+                        "chat",
+                        "--dry-run",
+                        "--local-agents",
+                        "--web-poll",
+                        "--state-dir",
+                        str(Path(tmp) / "state"),
+                        "--workspace-root",
+                        str(Path(tmp) / "workspaces"),
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertTrue(start.called)
+        self.assertTrue(stop_event.is_set())
+        self.assertTrue(stop_handoff.called)
+
+    def test_chat_cli_once_does_not_start_background_services(self) -> None:
+        class _FakeChatSession:
+            def __init__(self, **kwargs):
+                pass
+
+            def reply(self, text, *, progress=None):
+                return "ok"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(cli_module, "HandlerChatSession", _FakeChatSession), mock.patch.object(
+                cli_module, "_start_chat_web_bridge"
+            ) as poll, mock.patch.object(cli_module, "_start_chat_handoff_server") as handoff:
+                code = main(
+                    [
+                        "chat",
+                        "--dry-run",
+                        "--local-agents",
+                        "--state-dir",
+                        str(Path(tmp) / "state"),
+                        "--workspace-root",
+                        str(Path(tmp) / "workspaces"),
+                        "--once",
+                        "inspect robot state",
+                    ]
+                )
+
+        self.assertEqual(code, 0)
+        self.assertFalse(poll.called)
+        self.assertFalse(handoff.called)
 
     def test_handler_chat_agent_can_answer_capability_question_directly(self) -> None:
         class _ExplodingPlatform(DryRunPlatform):

@@ -37,6 +37,8 @@ class Strategist:
             "Plan uses only discovered skills; no simulation-only predicate is assumed.",
         ]
         object_conditioned_grasp = _wants_object_conditioned_grasp(lowered)
+        web_order_item = _first_order_payload_item(text)
+        web_cache_traj_pipeline = _wants_web_cache_traj_pipeline(web_order_item, available)
 
         if "observe" in available:
             steps.append(
@@ -47,7 +49,49 @@ class Strategist:
                 )
             )
 
-        if "capture_image" in available and (_wants_visual_evidence(lowered) or object_conditioned_grasp):
+        if web_cache_traj_pipeline:
+            target = str(web_order_item.get("name") or "").strip()
+            steps.extend(
+                [
+                    SkillCall(
+                        "capture_image",
+                        {"source": "d435_rgbd", "camera": "d435", "required": True},
+                        "capture the current vending tray before selecting the cached trajectory",
+                    ),
+                    SkillCall(
+                        "grounded_sam2",
+                        {
+                            "text_prompt": _ensure_prompt(target),
+                            "img_path": {"$ref": "capture_image.rgb.path"},
+                        },
+                        "segment the ordered object for tray region lookup",
+                    ),
+                    SkillCall(
+                        "object_region_index",
+                        {"annotation": {"$ref": "grounded_sam2.annotations.0"}},
+                        "map the segmented object mask to the right-to-left tray index",
+                    ),
+                    SkillCall(
+                        "play_cache_traj",
+                        {
+                            "episode": {"$ref": "object_region_index.index"},
+                            "settle_s": 1.0,
+                            "return_to_init": True,
+                            "velocity_limit_rad_s": 0.5,
+                        },
+                        "replay the cached trajectory episode matching the tray region index",
+                    ),
+                ]
+            )
+            control_added = True
+        else:
+            control_added = False
+
+        if (
+            not web_cache_traj_pipeline
+            and "capture_image" in available
+            and (_wants_visual_evidence(lowered) or object_conditioned_grasp)
+        ):
             capture_args: dict[str, Any]
             if object_conditioned_grasp:
                 capture_args = {"source": "d435_rgbd", "camera": "d435", "required": True}
@@ -61,7 +105,7 @@ class Strategist:
                 )
             )
 
-        if "grounded_sam2" in available and object_conditioned_grasp:
+        if not web_cache_traj_pipeline and "grounded_sam2" in available and object_conditioned_grasp:
             steps.append(
                 SkillCall(
                     "grounded_sam2",
@@ -73,7 +117,7 @@ class Strategist:
                 )
             )
 
-        if "detect_grasps" in available and _wants_grasp_detection(lowered):
+        if not web_cache_traj_pipeline and "detect_grasps" in available and _wants_grasp_detection(lowered):
             grasp_args: dict[str, Any] = {"check_only": _wants_anygrasp_check_only(lowered), "top_k": 5}
             if object_conditioned_grasp:
                 grasp_args["region_object_id"] = 1
@@ -88,13 +132,13 @@ class Strategist:
                 )
             )
 
-        control_added = False
-        control_added |= _maybe_add_grasp_target(text, lowered, available, steps)
-        control_added |= _maybe_add_base_velocity(lowered, available, steps, research_questions)
-        control_added |= _maybe_add_lift_height(lowered, available, steps, research_questions)
-        control_added |= _maybe_add_gripper(lowered, available, steps, research_questions, assumptions)
-        control_added |= _maybe_add_arm_ee(text, lowered, available, steps, research_questions)
-        control_added |= _maybe_add_arm_joints(lowered, available, steps, research_questions)
+        if not web_cache_traj_pipeline:
+            control_added |= _maybe_add_grasp_target(text, lowered, available, steps)
+            control_added |= _maybe_add_base_velocity(lowered, available, steps, research_questions)
+            control_added |= _maybe_add_lift_height(lowered, available, steps, research_questions)
+            control_added |= _maybe_add_gripper(lowered, available, steps, research_questions, assumptions)
+            control_added |= _maybe_add_arm_ee(text, lowered, available, steps, research_questions)
+            control_added |= _maybe_add_arm_joints(lowered, available, steps, research_questions)
 
         if "init_arms" in available and _plan_needs_arm_init(steps):
             insert_at = 1 if steps and steps[0].name == "observe" else 0
@@ -203,6 +247,7 @@ FLOAT = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)"
 _CONTROL_SKILLS = {
     "move_arm_ee",
     "move_arm_joints",
+    "play_cache_traj",
     "set_gripper",
     "set_base_velocity",
     "set_lift_height",
@@ -552,6 +597,13 @@ def _maybe_add_grasp_target(
         )
     )
     return True
+
+
+def _wants_web_cache_traj_pipeline(item: dict[str, Any] | None, available: set[str]) -> bool:
+    if not item:
+        return False
+    required = {"capture_image", "grounded_sam2", "object_region_index", "play_cache_traj"}
+    return required <= available
 
 
 def _first_order_payload_item(text: str) -> dict[str, Any] | None:
