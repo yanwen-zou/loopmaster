@@ -6,7 +6,7 @@ LoopMaster uses a file-backed role graph with a real-robot platform boundary:
 Handler -> Strategist -> Worker -> Auditor
    |           |           |          |
    |           |           |          + writes review.md and next-action verdict
-   |           |           + executes base platform skills, observes after control, writes summary.md/trace.jsonl
+   |           |           + executes repository skills, observes after control, writes summary.md/trace.jsonl
    |           + selects registry-backed skills and writes plan.md
    + owns workspace, robot connection, and role handoff
 ```
@@ -61,7 +61,7 @@ or longer polling, not an automatic claim that the motion did not happen.
 The Auditor classifies outcomes as `done`, `retry`, `blocked`, or
 `research_needed`. `research_needed` is the real-robot analogue of the
 RoboHermes self-evolution path: use the trace evidence to author or approve a
-learned skill under `LOOPMASTER_SKILL_ROOT`, then rerun the Handler.
+skill under `LOOPMASTER_SKILL_ROOT` (default `loopmaster_agentic/skills`), then rerun the Handler.
 
 ## Platform Boundary
 
@@ -83,15 +83,15 @@ machines without robot hardware dependencies.
 
 ## Skill Policy
 
-Shipped skills are limited to platform basics:
+Repository skills include platform basics and approved task-level skills:
 
 - perception: `observe`, `capture_image`
 - control: `move_arm_ee`, `move_arm_joints`, `set_gripper`, `set_base_velocity`,
-  `set_lift_height`, `stop_motion`
+  `set_lift_height`, `stop_motion`, `grasp_target`, `oscillate_arm_joint`
 
-There are no shipped task recipes or simulation-specific bindings.
-Task-specific skills should be learned later and placed under the user skill
-root configured by `LOOPMASTER_SKILL_ROOT`.
+There are no simulation-specific bindings. New approved task-specific skills
+should be placed directly under `loopmaster_agentic/skills/<category>/`, or
+another root configured by `LOOPMASTER_SKILL_ROOT`.
 
 ## Worker Context
 

@@ -91,8 +91,7 @@ code,.mono{font-family:"JetBrains Mono","SF Mono",Consolas,monospace}
 .badge{font-size:10.5px;padding:2px 7px;border-radius:8px;font-weight:700}
 .b-perception{background:rgba(34,211,238,.14);color:#67e8f9}
 .b-control{background:rgba(245,165,36,.16);color:#fbbf24}
-.b-user{background:rgba(168,85,247,.16);color:#c4b5fd}
-.b-base{background:var(--panel3);color:var(--muted)}
+.b-repo{background:var(--panel3);color:var(--muted)}
 .b-sel{background:rgba(168,85,247,.16);color:#c4b5fd;border:1px solid #a855f7}
 .b-exec{background:rgba(34,211,238,.14);color:#67e8f9}
 .arg{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted);

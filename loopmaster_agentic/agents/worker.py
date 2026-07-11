@@ -167,7 +167,7 @@ def _attach_skill_caller(
         step = _execute_call(
             name,
             args or {},
-            f"called by learned skill through context.call_skill",
+            f"called by composite skill through context.call_skill",
             context,
             skills,
             trace,
@@ -297,7 +297,7 @@ def _worker_prompt(*, plan: Plan, workspace: Workspace, skills: list[Any] | None
             "registered platform skills. Do not execute tools yourself, do not edit files, and do "
             "not add unregistered skills. A plan step named create_skill is a registered meta skill "
             "when it appears in the provided plan; do not reject it merely because it authors a "
-            "learned skill, but do reject malformed create_skill args or unsafe immediate motion. "
+            "new skill, but do reject malformed create_skill args or unsafe immediate motion. "
             "A plan step named init_arms is the registered arm initialization skill: it loads the "
             "repository init config, validates joint limits, commands both arms, and verifies state "
             "feedback. Do not reject init_arms merely because it moves both arms to a fixed pose; "

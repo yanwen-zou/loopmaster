@@ -100,8 +100,7 @@ code,.mono{font-family:"JetBrains Mono","SF Mono",Consolas,monospace}
 .badge{font-size:10.5px;padding:2px 7px;border-radius:8px;font-weight:700}
 .b-perception{background:rgba(14,151,183,.13);color:#0e7f99}
 .b-control{background:rgba(232,137,12,.16);color:#b45309}
-.b-user{background:rgba(124,58,237,.14);color:#7c3aed}
-.b-base{background:var(--panel3);color:var(--muted)}
+.b-repo{background:var(--panel3);color:var(--muted)}
 .b-sel{background:rgba(124,58,237,.14);color:#7c3aed;border:1px solid #7c3aed}
 .b-exec{background:rgba(14,151,183,.13);color:#0e7f99}
 .arg{font-family:"JetBrains Mono",monospace;font-size:10.5px;color:var(--muted);

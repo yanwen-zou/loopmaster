@@ -9,8 +9,8 @@ LoopViz 演示推送脚本
 依赖：仅标准库（urllib），无需 pip 安装。
 
 用法：
-    # 默认推到线上（需带写接口令牌）
-    python push_demo.py --token 你的LOOPMASTER_API_TOKEN
+    # 默认推到线上（内置本地默认写接口令牌）
+    python push_demo.py
 
     # 指定服务器 / 频率 / 只推固定份数
     python push_demo.py --base https://loopmaster.box2ai.com --token XXX --interval 5
@@ -19,8 +19,7 @@ LoopViz 演示推送脚本
     # 停止时顺便删掉本脚本推送过的 run（清场）
     python push_demo.py --token XXX --clean
 
-令牌来源：--token 参数 或 环境变量 LOOPMASTER_API_TOKEN。
-（服务器若没设 LOOPMASTER_API_TOKEN 则写接口全开，可不带令牌。）
+令牌来源：--token 参数 或 环境变量 LOOPMASTER_API_TOKEN；未设置时使用本地默认令牌。
 """
 import os
 import re
@@ -31,6 +30,8 @@ import argparse
 import urllib.request
 import urllib.error
 from datetime import datetime
+
+DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
 
 # 机械臂/底盘等控制类技能（与后端 LV_CONTROL_SKILLS 保持一致）
 CONTROL = {"send_action", "move_arm_joints", "set_gripper", "set_base_velocity", "set_lift_height"}
@@ -45,7 +46,7 @@ SKILLS = [
     ("move_arm_joints", "control", "驱动指定手臂到目标关节角", {"side": "str", "joints": "list"}),
     ("set_gripper", "control", "开合指定夹爪", {"side": "str", "position": "float"}),
     ("stop_motion", "safety", "立即停止一切运动，安全收尾", {"reason": "str"}),
-    ("oscillate_arm_joint", "learned/control", "让指定手臂单关节围绕当前值来回摆动 N 次",
+    ("oscillate_arm_joint", "control", "让指定手臂单关节围绕当前值来回摆动 N 次",
      {"side": "str", "joint": "int", "amp_rad": "float", "cycles": "int"}),
 ]
 
@@ -349,7 +350,7 @@ def main():
     ap = argparse.ArgumentParser(description="LoopViz 演示推送脚本")
     ap.add_argument("--base", default=os.environ.get("LOOPMASTER_BASE", "https://loopmaster.box2ai.com"),
                     help="网站地址，默认线上 https://loopmaster.box2ai.com")
-    ap.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", ""),
+    ap.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", DEFAULT_API_TOKEN),
                     help="写接口令牌（或设环境变量 LOOPMASTER_API_TOKEN）")
     ap.add_argument("--interval", type=float, default=9.0,
                     help="每隔几秒推送一次运行，默认 9s（够看完一轮 Agent Loop 回放；配合服务器 LOOPVIZ_TTL≈20）")

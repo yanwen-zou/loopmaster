@@ -18,7 +18,7 @@ python app.py            # 仅需 flask
 
 - **顶部**：run 选择器 + 审计结论徽章。
 - **流水线条**：Handler → Strategist → Worker → Auditor，彩色角色卡，点击切换，卡上显示该角色本轮关键状态。
-- **全景 & 技能库**：闭环概览、四角色职责、共享技能注册表（9 个基础技能，感知/控制分组，base/learned 徽章、参数）。
+- **全景 & 技能库**：闭环概览、四角色职责、共享技能注册表（感知/控制分组、参数）。
 - **四个角色页**（每个一套独立界面，三栏）：
   1. **拥有/关联的 Skills** —— Handler 拥有整表；Strategist 高亮 *selected*；Worker 显示 *executed ×次数*；Auditor 显示 *evaluated + control 标记 + 仿真泄漏检测*。
   2. **做了什么** —— Handler 交接链/产物；Strategist 计划步骤+判据+风险+研究问题；Worker 执行**时间线**（含控制后自动注入的 `worker.monitor` observe 闭环证据）；Auditor 判定+根因+证据。
@@ -41,7 +41,7 @@ python app.py            # 仅需 flask
 2. `../_viz_runs`（仓库内，已含 4 个演示 run）
 3. `~/.loopmaster/workspaces`（正式运行默认落盘处）
 
-技能扫描：`loopmaster_agentic/skills/base/**/SKILL.md` + 用户技能根 `LOOPMASTER_SKILL_ROOT`（默认 `~/.loopmaster/skills`）。
+技能扫描：技能根 `LOOPMASTER_SKILL_ROOT`，默认 `loopmaster_agentic/skills/**/SKILL.md`。
 
 ## 生成更多 run 供可视化
 

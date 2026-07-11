@@ -27,11 +27,11 @@ DB_PATH = os.path.join(BASE_DIR, "vending.db")
 BACKUP_DIR = os.path.join(BASE_DIR, "backup")
 
 # LoopViz 数据源（只读扫描 loopmaster 产物，不修改其代码）
-LOOP_REPO = Path(BASE_DIR).parent / "loopmaster"
+LOOP_REPO = Path(BASE_DIR).parent
 # LoopViz 运行存活秒数：>0 时，run 超过该秒数自动从列表消失（演示用，脚本停推后页面自动留白）；
 # 0=永不过期（真实 agent 框架用）。环境变量 LOOPVIZ_TTL 控制。
 LOOPVIZ_TTL = float(os.environ.get("LOOPVIZ_TTL", "0") or 0)
-LOOP_SKILL_ROOT = LOOP_REPO / "loopmaster_agentic" / "skills" / "base"
+LOOP_SKILL_ROOT = LOOP_REPO / "loopmaster_agentic" / "skills"
 
 # 机械臂模拟参数
 # ARM_SIMULATE：True=下单本地即时模拟机械臂（演示）；False=真实机器人模式，下单只建待执行
@@ -41,9 +41,9 @@ ARM_SUCCESS_RATE = 0.90      # 单次抓取成功率
 ARM_MAX_RETRY = 2            # 单个货品最多尝试次数
 NEW_USER_COINS = 200.0       # 新用户赠送月亮币
 
-# 开放给 agent 框架的写接口令牌：设了环境变量 LOOPMASTER_API_TOKEN 就要求校验，
-# 不设则接口全开（本机开发用）。上阿里云建议务必设置。
-API_TOKEN = os.environ.get("LOOPMASTER_API_TOKEN", "").strip()
+# 开放给 agent 框架的写接口令牌：环境变量 LOOPMASTER_API_TOKEN 可覆盖默认令牌。
+DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
+API_TOKEN = os.environ.get("LOOPMASTER_API_TOKEN", DEFAULT_API_TOKEN).strip()
 
 app = Flask(__name__)
 # 静态文件（CSS/JS）不长期缓存：改了样式浏览器会重新拉取，避免旧样式卡住布局
@@ -792,8 +792,8 @@ LV_ROLES = {
     },
     "auditor": {
         "name": "Auditor", "cn": "审计官", "icon": "🔍", "color": "#34d399",
-        "duty": "Reviews trace evidence, detects missing learned skills, writes review.md.",
-        "duty_cn": "依据轨迹证据判定结果（done/retry/blocked/research_needed），发现缺失的可学习技能。",
+        "duty": "Reviews trace evidence, detects missing task-level skills, writes review.md.",
+        "duty_cn": "依据轨迹证据判定结果（done/retry/blocked/research_needed），发现缺失的任务级技能。",
         "contract": ("Independently review the plan and trace. Classify the run as done, retry, "
                      "blocked, or research_needed. Do not execute tools or edit files."),
         "produces": ["review.md", "auditor_agent.json"],
@@ -831,9 +831,7 @@ def _lv_parse_frontmatter(text):
 
 
 def lv_load_skills():
-    roots = [(LOOP_SKILL_ROOT, False)]
-    user_root = Path(os.environ.get("LOOPMASTER_SKILL_ROOT", "~/.loopmaster/skills")).expanduser()
-    roots.append((user_root, True))
+    roots = [(Path(os.environ.get("LOOPMASTER_SKILL_ROOT", str(LOOP_SKILL_ROOT))).expanduser(), False)]
     out = {}
     for root, is_user in roots:
         if not root.exists():
@@ -844,7 +842,7 @@ def lv_load_skills():
             name = fm.get("name") or md.parent.name
             if name in out:
                 continue
-            category = fm.get("category") or "/".join(rel[:-1]) or "base"
+            category = fm.get("category") or "/".join(rel[:-1]) or "misc"
             out[name] = {
                 "name": name,
                 "category": category,
@@ -1118,7 +1116,7 @@ def api_lv_delete_run(run_id):
 
 @app.route("/api/loopviz/skill", methods=["POST"])
 def api_lv_write_skill():
-    """agent 框架注册/更新一个技能，写入用户技能目录（LOOPMASTER_SKILL_ROOT，默认 ~/.loopmaster/skills）。
+    """agent 框架注册/更新一个技能，写入用户技能目录（LOOPMASTER_SKILL_ROOT，默认 loopmaster_agentic/skills）。
     body: {name, category, description, args:{..}, body, }"""
     if not check_token():
         return jsonify(ok=False, msg="未授权（需 X-API-Token）"), 401
@@ -1126,12 +1124,12 @@ def api_lv_write_skill():
     name = (data.get("name") or "").strip()
     if not name or not re.match(r"^[A-Za-z0-9_.-]+$", name):
         return jsonify(ok=False, msg="非法技能名"), 400
-    category = (data.get("category") or "base").strip().strip("/") or "base"
+    category = (data.get("category") or "control").strip().strip("/") or "control"
     description = (data.get("description") or "").replace("\n", " ").strip()
     args = data.get("args") if isinstance(data.get("args"), dict) else {}
     body = str(data.get("body") or "").strip()
 
-    root = Path(os.environ.get("LOOPMASTER_SKILL_ROOT", "~/.loopmaster/skills")).expanduser()
+    root = Path(os.environ.get("LOOPMASTER_SKILL_ROOT", str(LOOP_SKILL_ROOT))).expanduser()
     skill_dir = root / category / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     lines = ["---", f"name: {name}", f"category: {category}"]

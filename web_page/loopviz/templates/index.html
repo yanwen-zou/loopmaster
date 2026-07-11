@@ -137,7 +137,7 @@ function skillCard(s,extraBadge){
       <span style="display:flex;gap:5px">
         ${extraBadge||''}
         <span class="badge b-${s.group}">${s.group}</span>
-        <span class="badge ${s.is_user?'b-user':'b-base'}">${s.is_user?'learned':'base'}</span>
+        <span class="badge b-repo">repo</span>
       </span></div>
     <div class="sdesc">${esc(s.description)}</div>
     ${args?`<div class="sargs">${args}</div>`:''}

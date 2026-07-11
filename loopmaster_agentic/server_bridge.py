@@ -263,7 +263,7 @@ class ServerBridge:
         self.client.report_task(
             task_id=task_id,
             status=report_status,
-            items=_delivered_items(payload_items, delivered=result.success),
+            items=_result_delivered_items(result, payload_items),
             arm=_arm_counts(result),
             result={
                 "success": result.success,
@@ -451,6 +451,20 @@ def _delivered_items(items: list[dict[str, Any]], *, delivered: bool) -> list[di
         {"id": item.get("id"), "delivered": int(item.get("qty") or 0) if delivered else 0}
         for item in items
     ]
+
+
+def _result_delivered_items(result: RunResult, payload_items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    for step in reversed(result.trace):
+        delivered_items = step.result.get("delivered_items") if isinstance(step.result, dict) else None
+        if isinstance(delivered_items, list):
+            out = [
+                {"id": item.get("id"), "delivered": int(item.get("delivered") or 0)}
+                for item in delivered_items
+                if isinstance(item, dict) and item.get("id") is not None
+            ]
+            if out:
+                return out
+    return _delivered_items(payload_items, delivered=result.success)
 
 
 def _arm_counts(result: RunResult) -> dict[str, int]:

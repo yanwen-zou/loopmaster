@@ -289,6 +289,18 @@ class Handler:
                             if progress is not None:
                                 progress(f"strategist revised plan: {_format_plan_steps(plan_override)}")
                             continue
+                if self.agent_client is not None:
+                    review = self._summarize_for_user(
+                        task=task,
+                        user_request=user_request,
+                        workspace=workspace,
+                        plan=plan,
+                        trace=trace,
+                        review=review,
+                        success=bool(review.get("success")),
+                        notes=notes,
+                        progress=progress,
+                    )
                 return RunResult(
                     task=task,
                     workspace=str(workspace.root),
@@ -305,6 +317,52 @@ class Handler:
         if self.agent_client is not None and hasattr(self.agent_client, "clear"):
             self.agent_client.clear()
 
+    def _summarize_for_user(
+        self,
+        *,
+        task: str,
+        user_request: str,
+        workspace: Any,
+        plan: Plan,
+        trace: list[Any],
+        review: dict[str, Any],
+        success: bool,
+        notes: list[str],
+        progress: Callable[[str], None] | None,
+    ) -> dict[str, Any]:
+        if self.agent_client is None:
+            return review
+        if progress is not None:
+            progress("handler agent summarizing run for user")
+        try:
+            summary = self.agent_client.run_json(
+                role="handler_summary",
+                prompt=_handler_summary_prompt(
+                    task=task,
+                    user_request=user_request,
+                    workspace=str(workspace.root),
+                    plan=plan,
+                    trace=trace,
+                    review=review,
+                    success=success,
+                    notes=notes,
+                ),
+                schema=_HANDLER_SUMMARY_SCHEMA,
+            )
+        except Exception as exc:
+            notes.append(f"handler summary agent failed: {type(exc).__name__}: {_short_error(exc)}")
+            if progress is not None:
+                progress(f"handler summary failed: {type(exc).__name__}: {_short_error(exc)}")
+            return review
+        _write_json(workspace.root / "handler_summary_agent.json", summary)
+        notes.extend(_agent_notes("handler_summary", summary))
+        response = str(summary.get("response") or "").strip()
+        if not response:
+            return review
+        merged = dict(review)
+        merged["response"] = response
+        return merged
+
 
 _HANDLER_SCHEMA: dict[str, Any] = {
     "type": "object",
@@ -316,6 +374,17 @@ _HANDLER_SCHEMA: dict[str, Any] = {
         "safety_notes": {"type": "array", "items": {"type": "string"}},
     },
     "required": ["route", "direct_response", "run_intent", "handoff_notes", "safety_notes"],
+    "additionalProperties": False,
+}
+
+
+_HANDLER_SUMMARY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "response": {"type": "string"},
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": ["response", "notes"],
     "additionalProperties": False,
 }
 
@@ -390,6 +459,63 @@ def _handler_prompt(*, task: str, user_request: str, skills: SkillRegistry) -> s
         ),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False)
+
+
+def _handler_summary_prompt(
+    *,
+    task: str,
+    user_request: str,
+    workspace: str,
+    plan: Plan,
+    trace: list[Any],
+    review: dict[str, Any],
+    success: bool,
+    notes: list[str],
+) -> str:
+    payload = {
+        "role": "handler_summary",
+        "contract": (
+            "You are the LoopMaster Handler writing the final user-facing reply after a robot run. "
+            "Summarize what happened in the user's language. Do not expose internal prompts, raw JSON, "
+            "stack traces, hidden auditor fields, or full low-level args. Be concise and concrete. "
+            "For success, state what was completed and mention important skills/results. For failure, "
+            "state what blocked completion and the most useful next action. Include the workspace path "
+            "only if it helps the user inspect the run artifact. Return only JSON matching the schema."
+        ),
+        "task": task,
+        "user_request": user_request,
+        "workspace": workspace,
+        "success": success,
+        "plan": {
+            "goal": plan.goal,
+            "steps": [{"name": step.name, "args": step.args, "why": step.why} for step in plan.steps],
+            "success_criteria": list(plan.success_criteria),
+            "risks": list(plan.risks),
+            "assumptions": list(plan.assumptions),
+        },
+        "trace": [
+            {
+                "index": step.index,
+                "skill": step.skill,
+                "ok": step.ok,
+                "why": step.why,
+                "result_summary": _trace_result_for_summary(step.result, ok=step.ok),
+            }
+            for step in trace
+        ],
+        "auditor_review": {
+            "verdict": review.get("verdict"),
+            "success": review.get("success"),
+            "root_cause": review.get("root_cause"),
+            "next_action": review.get("next_action"),
+            "used_skills": review.get("used_skills") or [],
+            "used_control_skills": review.get("used_control_skills") or [],
+            "research_questions": review.get("research_questions") or [],
+            "notes": review.get("notes") or [],
+        },
+        "handler_notes": list(notes),
+    }
+    return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
 
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
@@ -657,6 +783,38 @@ def _auditor_failure_markdown(plan: Plan, review: dict[str, Any]) -> str:
 
 def _short_error(error: Exception, *, limit: int = 240) -> str:
     text = str(error).replace("\n", " ").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _trace_result_for_summary(result: Any, *, ok: bool) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {"ok": ok, "value": _short_text(str(result), limit=240)}
+    out: dict[str, Any] = {"ok": ok}
+    if not ok:
+        out["error"] = _short_text(str(result.get("error") or result), limit=240)
+        return out
+    for key in ("summary", "diagnosis", "side", "joint", "cycles", "sent_frames", "episode"):
+        if key in result:
+            out[key] = result[key]
+    if "action_sent" in result:
+        action = result["action_sent"]
+        if isinstance(action, dict):
+            out["action_sent_keys"] = sorted(str(key) for key in action)[:20]
+        else:
+            out["action_sent"] = _short_text(str(action), limit=240)
+    observation = result.get("observation")
+    if isinstance(observation, dict):
+        out["state_keys"] = observation.get("state_keys") or sorted((observation.get("state") or {}).keys())[:20]
+        if observation.get("images"):
+            out["image_keys"] = sorted(str(key) for key in observation.get("images", {}))
+    image = result.get("image")
+    if isinstance(image, dict):
+        out["image"] = {key: image.get(key) for key in ("shape", "dtype", "path") if key in image}
+    return out
+
+
+def _short_text(text: str, *, limit: int = 240) -> str:
+    text = text.replace("\n", " ").strip()
     return text if len(text) <= limit else text[: limit - 3] + "..."
 
 

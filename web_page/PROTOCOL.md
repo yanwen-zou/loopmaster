@@ -6,7 +6,8 @@
 - Base URL：`http://loopmaster.box2ai.com/`（或 `http://IP:5000/`）
 - 编码：全部 JSON，UTF-8
 - **鉴权**：所有**写接口**需带请求头 `X-API-Token: <令牌>`（或 `?token=`）。
-  令牌 = 服务器环境变量 `LOOPMASTER_API_TOKEN`。读接口不需要。
+  默认令牌为 `06de644db26bf26dc5fbef2657b5af6b`；服务器环境变量
+  `LOOPMASTER_API_TOKEN` 可覆盖默认值。读接口不需要。
 - 金额单位：月亮币（1 月亮币 = 1 元）
 
 ---
@@ -130,7 +131,7 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 |---|---|---|
 | POST 🔒 | `/api/loopviz/run` | 推送一次运行 `{id, files:{"plan.md":..,"trace.jsonl":..,"loop_events.json":[..],"*_agent.json":{..}}}`（dict/list 自动转 JSON） |
 | DELETE 🔒 | `/api/loopviz/run/<id>` | 删除一次运行 |
-| POST 🔒 | `/api/loopviz/skill` | 注册/更新技能 `{name, category, description, args:{..}, body}`，写入 `LOOPMASTER_SKILL_ROOT`（默认 `~/.loopmaster/skills`） |
+| POST 🔒 | `/api/loopviz/skill` | 注册/更新技能 `{name, category, description, args:{..}, body}`，写入 `LOOPMASTER_SKILL_ROOT`（默认 `loopmaster_agentic/skills`） |
 | GET | `/api/loopviz/skills` | 读技能注册表 + 四角色定义 |
 | GET | `/api/loopviz/runs` | 读运行列表 |
 | GET | `/api/loopviz/run/<id>` | 读单次运行详情 |

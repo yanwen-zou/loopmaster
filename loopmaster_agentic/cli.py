@@ -32,6 +32,7 @@ from loopmaster_agentic.server_bridge import (
 )
 
 DEFAULT_REMOTE_IP = "192.168.31.22"
+DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -111,7 +112,7 @@ def _web_bridge_main(argv: list[str]) -> int:
         description="Poll a deployed web_page server for pending orders and execute them with the local Handler."
     )
     parser.add_argument("--base", default=os.environ.get("LOOPMASTER_BASE", "https://loopmaster.box2ai.com"))
-    parser.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", ""))
+    parser.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", DEFAULT_API_TOKEN))
     parser.add_argument("--agent-id", default=os.environ.get("LOOPMASTER_AGENT_ID", f"loopmaster-{socket.gethostname()}"))
     parser.add_argument("--poll-interval", type=float, default=float(os.environ.get("LOOPMASTER_POLL_INTERVAL", "2")))
     parser.add_argument("--task-timeout", type=float, default=float(os.environ.get("LOOPMASTER_TASK_TIMEOUT", "120")))
@@ -157,7 +158,7 @@ def _push_run_main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Push a local LoopMaster workspace/run directory to web_page LoopViz.")
     parser.add_argument("run_dir", type=Path, help="Directory containing plan.md/trace.jsonl/review.md.")
     parser.add_argument("--base", default=os.environ.get("LOOPMASTER_BASE", "https://loopmaster.box2ai.com"))
-    parser.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", ""))
+    parser.add_argument("--token", default=os.environ.get("LOOPMASTER_API_TOKEN", DEFAULT_API_TOKEN))
     args = parser.parse_args(argv)
 
     response = push_run_dir(base_url=args.base, token=args.token, run_dir=args.run_dir)

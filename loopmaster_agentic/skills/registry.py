@@ -12,11 +12,12 @@ from loopmaster_agentic.agents.workspace import Workspace
 from loopmaster_agentic.platform.base import RobotPlatform
 
 
-SHIPPED_ROOT = Path(__file__).resolve().parent / "base"
+SKILL_ROOT = Path(__file__).resolve().parent
+SHIPPED_ROOT = SKILL_ROOT
 
 
 def user_skill_root() -> Path:
-    return Path(os.environ.get("LOOPMASTER_SKILL_ROOT", "~/.loopmaster/skills")).expanduser()
+    return Path(os.environ.get("LOOPMASTER_SKILL_ROOT", str(SKILL_ROOT))).expanduser()
 
 
 @dataclass(frozen=True)
@@ -43,16 +44,17 @@ class SkillContext:
 
 
 class SkillRegistry:
-    """Discovers base real-robot skills and optional learned user skills."""
+    """Discovers repository-local real-robot skills."""
 
     def __init__(
         self,
         roots: list[Path] | None = None,
         include_user: bool = True,
     ) -> None:
-        self.roots = roots or [SHIPPED_ROOT]
-        if include_user:
-            self.roots.append(user_skill_root())
+        self.roots = roots or [SKILL_ROOT]
+        env_root = user_skill_root()
+        if include_user and env_root not in self.roots:
+            self.roots.append(env_root)
         self._skills: dict[str, Skill] | None = None
         self._handlers: dict[str, Callable[[SkillContext, dict[str, Any]], dict[str, Any]]] = {}
 
@@ -84,7 +86,7 @@ class SkillRegistry:
             root = root.expanduser()
             if not root.exists():
                 continue
-            is_user = root == user_skill_root()
+            is_user = root != SKILL_ROOT
             for skill_md in root.rglob("SKILL.md"):
                 skill = _load_skill(root, skill_md, is_user)
                 out.setdefault(skill.name, skill)

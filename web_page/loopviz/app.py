@@ -17,8 +17,8 @@ from pathlib import Path
 from flask import Flask, jsonify, render_template
 
 APP_DIR = Path(__file__).resolve().parent
-REPO_ROOT = APP_DIR.parent
-SHIPPED_SKILL_ROOT = REPO_ROOT / "loopmaster_agentic" / "skills" / "base"
+REPO_ROOT = APP_DIR.parents[1]
+SKILL_ROOT = REPO_ROOT / "loopmaster_agentic" / "skills"
 
 app = Flask(__name__)
 
@@ -54,8 +54,8 @@ ROLES = {
     },
     "auditor": {
         "name": "Auditor", "cn": "审计官", "icon": "🔍", "color": "#34d399",
-        "duty": "Reviews trace evidence, detects missing learned skills, writes review.md.",
-        "duty_cn": "依据轨迹证据判定结果（done/retry/blocked/research_needed），发现缺失的可学习技能。",
+        "duty": "Reviews trace evidence, detects missing task-level skills, writes review.md.",
+        "duty_cn": "依据轨迹证据判定结果（done/retry/blocked/research_needed），发现缺失的任务级技能。",
         "contract": ("Independently review the plan and trace. Classify the run as done, retry, "
                      "blocked, or research_needed. Do not execute tools or edit files."),
         "produces": ["review.md", "auditor_agent.json"],
@@ -95,9 +95,7 @@ def _parse_frontmatter(text):
 
 
 def load_skills():
-    roots = [(SHIPPED_SKILL_ROOT, False)]
-    user_root = Path(os.environ.get("LOOPMASTER_SKILL_ROOT", "~/.loopmaster/skills")).expanduser()
-    roots.append((user_root, True))
+    roots = [(Path(os.environ.get("LOOPMASTER_SKILL_ROOT", str(SKILL_ROOT))).expanduser(), False)]
     out = {}
     for root, is_user in roots:
         if not root.exists():
@@ -108,7 +106,7 @@ def load_skills():
             name = fm.get("name") or md.parent.name
             if name in out:
                 continue
-            category = fm.get("category") or "/".join(rel[:-1]) or "base"
+            category = fm.get("category") or "/".join(rel[:-1]) or "misc"
             out[name] = {
                 "name": name,
                 "category": category,

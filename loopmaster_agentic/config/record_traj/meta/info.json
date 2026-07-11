@@ -1,0 +1,134 @@
+{
+    "codebase_version": "v3.0",
+    "fps": 30,
+    "features": {
+        "action": {
+            "dtype": "float32",
+            "shape": [
+                18
+            ],
+            "names": [
+                "right_joint_1.pos",
+                "right_joint_2.pos",
+                "right_joint_3.pos",
+                "right_joint_4.pos",
+                "right_joint_5.pos",
+                "right_joint_6.pos",
+                "right_gripper.pos",
+                "left_joint_1.pos",
+                "left_joint_2.pos",
+                "left_joint_3.pos",
+                "left_joint_4.pos",
+                "left_joint_5.pos",
+                "left_joint_6.pos",
+                "left_gripper.pos",
+                "x.vel",
+                "y.vel",
+                "theta.vel",
+                "height.pos"
+            ]
+        },
+        "observation.state": {
+            "dtype": "float32",
+            "shape": [
+                18
+            ],
+            "names": [
+                "right_joint_1.pos",
+                "right_joint_2.pos",
+                "right_joint_3.pos",
+                "right_joint_4.pos",
+                "right_joint_5.pos",
+                "right_joint_6.pos",
+                "right_gripper.pos",
+                "left_joint_1.pos",
+                "left_joint_2.pos",
+                "left_joint_3.pos",
+                "left_joint_4.pos",
+                "left_joint_5.pos",
+                "left_joint_6.pos",
+                "left_gripper.pos",
+                "x.vel",
+                "y.vel",
+                "theta.vel",
+                "height.pos"
+            ]
+        },
+        "observation.images.front": {
+            "dtype": "video",
+            "shape": [
+                480,
+                640,
+                3
+            ],
+            "names": [
+                "height",
+                "width",
+                "channels"
+            ],
+            "info": {
+                "video.height": 480,
+                "video.width": 640,
+                "video.codec": "av1",
+                "video.pix_fmt": "yuv420p",
+                "video.is_depth_map": false,
+                "video.fps": 30,
+                "video.channels": 3,
+                "has_audio": false,
+                "video.g": 2,
+                "video.crf": 30,
+                "video.preset": 12,
+                "video.fast_decode": 0,
+                "video.video_backend": "pyav",
+                "video.extra_options": {}
+            }
+        },
+        "timestamp": {
+            "dtype": "float32",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "frame_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "episode_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        },
+        "task_index": {
+            "dtype": "int64",
+            "shape": [
+                1
+            ],
+            "names": null
+        }
+    },
+    "total_episodes": 5,
+    "total_frames": 2924,
+    "total_tasks": 1,
+    "chunks_size": 1000,
+    "data_files_size_in_mb": 100,
+    "video_files_size_in_mb": 200,
+    "data_path": "data/chunk-{chunk_index:03d}/file-{file_index:03d}.parquet",
+    "video_path": "videos/{video_key}/chunk-{chunk_index:03d}/file-{file_index:03d}.mp4",
+    "robot_type": "hei_rebot_lift_client",
+    "splits": {
+        "train": "0:5"
+    }
+}

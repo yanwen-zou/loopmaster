@@ -8,7 +8,7 @@
 ```bash
 pip install -r requirements.txt      # 或 python -m venv 后再装
 python web_page/app.py
-python web_page/test/push_demo.py --token 06de644db26bf26dc5fbef2657b5af6b
+python web_page/test/push_demo.py
 ```
 
 启动后打开：
@@ -64,8 +64,9 @@ POST /api/arm/report   {"success": true}   # 或 false
 ## 开放给 agent 框架的写接口
 
 供 loopmaster agent 框架直接改「数据库内容」和「智能体（LoopViz）内容」。
-**写接口带令牌保护**：设了环境变量 `LOOPMASTER_API_TOKEN` 就必须在请求头 `X-API-Token`
-（或 `?token=`）带上；不设则全开（仅本机开发用）。**上阿里云务必设置。**
+**写接口带令牌保护**：默认令牌为 `06de644db26bf26dc5fbef2657b5af6b`。设了环境变量
+`LOOPMASTER_API_TOKEN` 会覆盖默认值；请求头 `X-API-Token`（或 `?token=`）必须匹配。
+**上阿里云建议换成新的随机长串。**
 
 > **网站 ↔ agent 机器人完整对接协议见 [`PROTOCOL.md`](PROTOCOL.md)**（下单→轮询→认领→执行→反馈）。
 
@@ -108,7 +109,7 @@ curl -X POST http://IP:5000/api/db/users -H "X-API-Token: 你的令牌" \
 |---|---|---|
 | POST   | `/api/loopviz/run` | 推送一次运行 `{id, files:{"plan.md":..,"trace.jsonl":..,"*_agent.json":{..}}}`（dict/list 自动转 JSON，文件名白名单） |
 | DELETE | `/api/loopviz/run/<id>` | 删除一次运行目录 |
-| POST   | `/api/loopviz/skill` | 注册/更新技能 `{name,category,description,args,body}`，写入 `LOOPMASTER_SKILL_ROOT`（默认 `~/.loopmaster/skills`） |
+| POST   | `/api/loopviz/skill` | 注册/更新技能 `{name,category,description,args,body}`，写入 `LOOPMASTER_SKILL_ROOT`（默认 `loopmaster_agentic/skills`） |
 
 - 运行默认写到 `LOOPMASTER_WORKSPACE_ROOT`，未设则写 `../loopmaster/_viz_runs/<id>/`。
 - 只要目录里有 `plan.md` 就会被 `/loopviz` 页与 `/api/loopviz/runs` 列出。
@@ -118,7 +119,7 @@ curl -X POST http://IP:5000/api/db/users -H "X-API-Token: 你的令牌" \
 ```bash
 cd ~/web_page            # 服务器上的实际路径
 pip install -r requirements.txt
-export LOOPMASTER_API_TOKEN=换成随机长串   # 保护写接口，必设
+export LOOPMASTER_API_TOKEN=换成随机长串   # 可覆盖默认令牌
 python app.py            # 已监听 0.0.0.0:5000
 ```
 

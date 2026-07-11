@@ -110,7 +110,7 @@ def _apply_new_skill_via_create_skill(
             SkillContext(platform=None, workspace=workspace),  # type: ignore[arg-type]
             {
                 "skill_name": skill_name,
-                "category": str(update.get("category") or "learned"),
+                "category": str(update.get("category") or "control"),
                 "rationale": result.rationale,
                 "files": update.get("files") or [],
             },
@@ -147,7 +147,7 @@ def _apply_new_skill(update: dict[str, Any]) -> SkillUpdateResult:
     if not _safe_name(skill_name):
         result.rejected.append(f"unsafe skill name: {skill_name}")
         return result
-    category = str(update.get("category") or "learned")
+    category = str(update.get("category") or "control")
     category_path = _safe_category_path(category)
     if category_path is None:
         result.rejected.append(f"unsafe category: {category}")
@@ -255,7 +255,7 @@ def _safe_name(value: str) -> bool:
 def _safe_category_path(value: str) -> Path | None:
     parts = tuple(part for part in Path(value).parts if part not in {"", "."})
     if not parts:
-        return Path("learned")
+        return Path("control")
     for part in parts:
         if part == ".." or not _safe_name(part):
             return None

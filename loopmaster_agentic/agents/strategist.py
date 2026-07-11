@@ -89,6 +89,7 @@ class Strategist:
             )
 
         control_added = False
+        control_added |= _maybe_add_grasp_target(text, lowered, available, steps)
         control_added |= _maybe_add_base_velocity(lowered, available, steps, research_questions)
         control_added |= _maybe_add_lift_height(lowered, available, steps, research_questions)
         control_added |= _maybe_add_gripper(lowered, available, steps, research_questions, assumptions)
@@ -112,7 +113,7 @@ class Strategist:
                 "but only base perception/control skills are registered."
             )
             subagent_notes.append(
-                "This run should gather state evidence and surface the missing learned skill."
+                "This run should gather state evidence and surface the missing task-level skill."
             )
 
         if "stop_motion" in available:
@@ -136,7 +137,7 @@ class Strategist:
             ],
             risks=[
                 "Low-level motion is only planned when the request includes explicit numeric arguments.",
-                "Task-specific manipulation policies are intentionally absent until learned under the user skill root.",
+                "Task-specific manipulation policies must be registered under the skill root before use.",
                 "Real hardware execution requires operator safety review before enabling learned motion skills.",
             ],
             assumptions=assumptions,
@@ -521,7 +522,70 @@ def _requested_object_prompt(text: str) -> str:
     return "object."
 
 
+def _maybe_add_grasp_target(
+    text: str,
+    lowered: str,
+    available: set[str],
+    steps: list[SkillCall],
+) -> bool:
+    if "grasp_target" not in available:
+        return False
+    if not _looks_like_manipulation_goal(lowered):
+        return False
+    item = _first_order_payload_item(text)
+    if item:
+        target = str(item.get("name") or "").strip()
+        args: dict[str, Any] = {
+            "target_prompt": _ensure_prompt(target),
+            "item_id": item.get("id"),
+            "quantity": int(item.get("qty") or 1),
+            "execute": True,
+        }
+    else:
+        target = _extract_quoted(text) or _extract_after_grasp_word(text) or "object"
+        args = {"target_prompt": _ensure_prompt(target), "quantity": 1, "execute": True}
+    steps.append(
+        SkillCall(
+            "grasp_target",
+            args,
+            "execute the learned vending grasp pipeline and return delivered_items for webpage reporting",
+        )
+    )
+    return True
+
+
+def _first_order_payload_item(text: str) -> dict[str, Any] | None:
+    marker = "Order payload:"
+    if marker not in text:
+        return None
+    raw = text.split(marker, 1)[1].strip()
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(parsed, list):
+        for item in parsed:
+            if isinstance(item, dict):
+                return item
+    return None
+
+
+def _ensure_prompt(text: str) -> str:
+    prompt = text.strip() or "object"
+    return prompt if prompt.endswith(".") else prompt + "."
+
+
+def _extract_after_grasp_word(text: str) -> str | None:
+    match = re.search(r"(?:抓取|抓起|拿起)[「\"']?([^」\"'，。；;\n]+)", text)
+    if match:
+        return match.group(1).strip()
+    return None
+
+
 def _extract_quoted(text: str) -> str | None:
+    cjk = re.search(r"[「『“]([^」』”]+)[」』”]", text)
+    if cjk:
+        return cjk.group(1).strip()
     match = re.search(r"['\"]([^'\"]+)['\"]", text)
     if match:
         return match.group(1).strip()

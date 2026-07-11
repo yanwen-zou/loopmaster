@@ -10,7 +10,7 @@ The handler-led subagent structure uses clear execution roles:
 | Handler | Owns the run, workspace, robot connection, and role handoff. |
 | Strategist | Selects registry-backed skills from the goal and writes `plan.md`. |
 | Worker | Executes the plan, observes after control actions, and writes `summary.md`/`trace.jsonl`. |
-| Auditor | Reviews trace evidence, detects missing learned skills, and writes `review.md`. |
+| Auditor | Reviews trace evidence, detects missing task-level skills, and writes `review.md`. |
 
 Motion runs must be closed-loop. A successful `action_sent` response only means
 the command was accepted by the platform; agents must also check periodic or
@@ -35,7 +35,7 @@ requires a valid machine-bound license, a detection checkpoint, and AnyGrasp's
 Python dependencies installed in the same uv environment. Run it with
 `check_only=true` to get the exact missing package list. There are no complete
 task policies in this tree. Learned skills can be added later under the user
-skill root without mixing them into the base platform adapter layer.
+skill root without mixing them into the platform adapter layer.
 
 ## Skill Self-Repair Policy
 

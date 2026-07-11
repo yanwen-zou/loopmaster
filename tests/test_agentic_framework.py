@@ -21,7 +21,7 @@ from loopmaster_agentic.core.result import RunResult
 from loopmaster_agentic.core.types import Plan, SkillCall, TraceStep
 from loopmaster_agentic.platform.dry_run import DryRunPlatform
 from loopmaster_agentic.platform.hei_rebot_lift import HeiRebotLiftPlatform, split_hei_observation
-from loopmaster_agentic.skills.registry import SkillContext, SkillRegistry
+from loopmaster_agentic.skills.registry import SHIPPED_ROOT, SkillContext, SkillRegistry
 from keyboard_control import TeleopState, _handle_key
 
 
@@ -37,7 +37,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertEqual(default_workspace_root(), Path.cwd() / "_runs")
 
-    def test_base_skill_surface_excludes_task_specific_skills(self) -> None:
+    def test_repo_skill_surface_lists_registered_skills(self) -> None:
         skills = SkillRegistry(include_user=False).list()
         names = {skill.name for skill in skills}
         self.assertEqual(
@@ -46,12 +46,16 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "capture_image",
                 "create_skill",
                 "detect_grasps",
+                "grasp_target",
                 "grounded_sam2",
                 "init_arms",
                 "move_arm_ee",
                 "move_arm_joints",
                 "navigation",
+                "object_region_index",
                 "observe",
+                "oscillate_arm_joint",
+                "play_cache_traj",
                 "set_base_velocity",
                 "set_gripper",
                 "set_lift_height",
@@ -65,7 +69,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertNotIn(term, searchable)
 
     def test_navigation_skill_sends_map_goal_and_records_goal_id(self) -> None:
-        from loopmaster_agentic.skills.base.navigation.navigation import policy
+        from loopmaster_agentic.skills.navigation.navigation import policy
 
         sent_payloads = []
         status = {
@@ -98,7 +102,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(sent_payloads[0]["x"], 1.5)
 
     def test_navigation_skill_rejects_invalid_goal_number(self) -> None:
-        from loopmaster_agentic.skills.base.navigation.navigation import policy
+        from loopmaster_agentic.skills.navigation.navigation import policy
 
         context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("nav_bad", root=Path("/tmp")))
         result = policy.dispatch(context, {"x": "bad", "y": 0, "yaw": 0})
@@ -141,7 +145,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(gripper_open["right_gripper.pos"], -5.0)
 
     def test_move_arm_ee_skill_returns_structured_ik_errors(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         with mock.patch.object(policy, "solve_arm_ee_dict", side_effect=RuntimeError("missing ik deps")):
             result = policy.dispatch(
@@ -157,7 +161,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIn("IK failed", result["error"])
 
     def test_move_arm_ee_skill_uses_velocity_limit_without_waypoints(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         class Platform(DryRunPlatform):
             def read_arm_positions(self, side: str) -> dict[str, float]:
@@ -196,7 +200,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(result["velocity_limit_rad_s"], 0.4)
 
     def test_move_arm_ee_skill_uses_explicit_current_positions(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         class Platform(DryRunPlatform):
             def read_arm_positions(self, side: str) -> dict[str, float]:
@@ -237,7 +241,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIn("left_joint_1.pos", platform.actions[0])
 
     def test_move_arm_ee_skill_holds_other_arm_positions(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         class Platform(DryRunPlatform):
             def command_arms(self, *, right=None, left=None) -> dict[str, float]:
@@ -279,7 +283,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertAlmostEqual(platform.actions[-1]["right"]["joint_1"], 0.2)
 
     def test_move_arm_ee_parses_prefixed_state_and_holds_other_arm(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         class Platform(DryRunPlatform):
             def command_arms(self, *, right=None, left=None) -> dict[str, float]:
@@ -324,7 +328,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(set(platform.actions[-1]["right"]), set(policy.JOINTS))
 
     def test_move_arm_joints_skill_can_command_both_arms(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_joints import policy
+        from loopmaster_agentic.skills.control.move_arm_joints import policy
 
         class Platform(DryRunPlatform):
             def command_arms(self, *, right=None, left=None) -> dict[str, float]:
@@ -347,7 +351,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(platform.actions[-1]["left"], positions)
 
     def test_move_arm_joints_preserves_unspecified_joints_from_current_state(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_joints import policy
+        from loopmaster_agentic.skills.control.move_arm_joints import policy
 
         platform = DryRunPlatform()
         for joint in policy.JOINTS:
@@ -377,12 +381,86 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["verified"]["ok"])
         self.assertEqual(result["trajectory"], [])
-        self.assertEqual(result["positions"]["joint_3"], -0.91)
-        self.assertAlmostEqual(platform.state["right_joint_3.pos"], -0.91)
-        self.assertAlmostEqual(platform.state["left_joint_3.pos"], -0.91)
+        self.assertAlmostEqual(platform.state["right_joint_3.pos"], result["positions"]["joint_3"])
+        self.assertAlmostEqual(platform.state["left_joint_3.pos"], result["positions"]["joint_3"])
+
+    def test_init_arms_verification_prefers_direct_arm_feedback_over_stale_observation(self) -> None:
+        class Platform(DryRunPlatform):
+            def __init__(self) -> None:
+                super().__init__()
+                self.arm_targets: dict[str, dict[str, float]] = {"right": {}, "left": {}}
+
+            def command_arms(self, *, right=None, left=None, velocity_limit_rad_s=None) -> dict[str, float]:
+                if right is not None:
+                    self.arm_targets["right"] = dict(right)
+                if left is not None:
+                    self.arm_targets["left"] = dict(left)
+                return {
+                    f"{side}_{joint}.pos": float(value)
+                    for side, positions in self.arm_targets.items()
+                    for joint, value in positions.items()
+                }
+
+            def read_arm_positions(self, side: str | None = None) -> dict[str, float]:
+                if side is None:
+                    return {
+                        f"{current_side}_{joint}.pos": float(value)
+                        for current_side, positions in self.arm_targets.items()
+                        for joint, value in positions.items()
+                    }
+                return dict(self.arm_targets[side])
+
+        platform = Platform()
+        result = SkillRegistry(include_user=False).dispatch(
+            "init_arms",
+            SkillContext(platform=platform, workspace=new_workspace("init_arms_direct_feedback", root=Path("/tmp"))),
+            {"settle_s": 0.0, "verify_timeout_s": 0.0},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["verified"]["source"], "read_arm_positions")
+        self.assertTrue(result["verified"]["ok"])
+
+    def test_play_cache_traj_skill_replays_episode_and_returns_to_init(self) -> None:
+        platform = DryRunPlatform()
+        workspace = new_workspace("play_cache_traj", root=Path("/tmp"))
+        registry = SkillRegistry(include_user=False)
+        context = SkillContext(platform=platform, workspace=workspace)
+
+        def call_skill(name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
+            return registry.dispatch(name, context, args or {})
+
+        setattr(context, "call_skill", call_skill)
+        result = registry.dispatch(
+            "play_cache_traj",
+            context,
+            {"episode": 0, "max_frames": 2, "settle_s": 0.0},
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["episode"], 0)
+        self.assertEqual(result["total_episodes"], 5)
+        self.assertEqual(result["sent_frames"], 2)
+        self.assertEqual(result["return_to_init"]["stop_motion"]["stopped"], True)
+        self.assertIsNone(result["return_to_init"]["init_arms"]["verified"])
+        init_positions = result["return_to_init"]["init_arms"]["positions"]
+        self.assertAlmostEqual(platform.state["right_joint_3.pos"], init_positions["joint_3"])
+        self.assertGreaterEqual(len(platform.actions), 4)
+
+    def test_play_cache_traj_skill_rejects_unknown_episode_before_motion(self) -> None:
+        platform = DryRunPlatform()
+        result = SkillRegistry(include_user=False).dispatch(
+            "play_cache_traj",
+            SkillContext(platform=platform, workspace=new_workspace("play_cache_traj_bad", root=Path("/tmp"))),
+            {"episode": 5, "max_frames": 1},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("episode must be in [0, 4]", result["error"])
+        self.assertEqual(platform.actions, [])
 
     def test_set_gripper_uses_signed_open_close_convention(self) -> None:
-        from loopmaster_agentic.skills.base.control.set_gripper import policy
+        from loopmaster_agentic.skills.control.set_gripper import policy
 
         context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("gripper", root=Path("/tmp")))
 
@@ -400,7 +478,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(closed["commanded_position"], 0.0)
 
     def test_set_gripper_filters_full_action_vector_and_can_verify_feedback(self) -> None:
-        from loopmaster_agentic.skills.base.control.set_gripper import policy
+        from loopmaster_agentic.skills.control.set_gripper import policy
 
         class Platform(DryRunPlatform):
             def set_gripper(self, side: str, position: float) -> dict[str, float]:
@@ -423,7 +501,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertNotIn("left_joint_1.pos", result["action_sent"])
 
     def test_set_base_velocity_filters_full_action_vector(self) -> None:
-        from loopmaster_agentic.skills.base.control.set_base_velocity import policy
+        from loopmaster_agentic.skills.control.set_base_velocity import policy
 
         class Platform(DryRunPlatform):
             def command_chassis(self, x=0.0, y=0.0, theta=0.0) -> dict[str, float]:
@@ -442,8 +520,8 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertNotIn("height.pos", result["action_sent"])
 
     def test_lift_and_stop_support_settle_windows(self) -> None:
-        from loopmaster_agentic.skills.base.control.set_lift_height import policy as lift_policy
-        from loopmaster_agentic.skills.base.control.stop_motion import policy as stop_policy
+        from loopmaster_agentic.skills.control.set_lift_height import policy as lift_policy
+        from loopmaster_agentic.skills.control.stop_motion import policy as stop_policy
 
         platform = DryRunPlatform()
         context = SkillContext(platform=platform, workspace=new_workspace("settle_controls", root=Path("/tmp")))
@@ -460,7 +538,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         stop_sleep.assert_called_once_with(0.5)
 
     def test_timer_skill_records_elapsed_and_wall_time(self) -> None:
-        from loopmaster_agentic.skills.base.meta.timer import policy
+        from loopmaster_agentic.skills.meta.timer import policy
 
         context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("timer", root=Path("/tmp")))
         with mock.patch.object(policy.time, "sleep", return_value=None) as sleep:
@@ -475,7 +553,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         sleep.assert_called_once_with(0.25)
 
     def test_move_arm_ee_position_only_target_ignores_orientation(self) -> None:
-        from loopmaster_agentic.skills.base.control.move_arm_ee import policy
+        from loopmaster_agentic.skills.control.move_arm_ee import policy
 
         fake_ik = {
             "ik_success": True,
@@ -605,7 +683,22 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
     def test_handler_reports_research_needed_for_missing_task_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            result = Handler(workspace_root=Path(tmp)).run(
+            skill_root = Path(tmp) / "skills"
+            for name in ("observe", "stop_motion"):
+                skill_dir = skill_root / "perception" / name if name == "observe" else skill_root / "control" / name
+                skill_dir.mkdir(parents=True)
+                (skill_dir / "SKILL.md").write_text(
+                    f"---\nname: {name}\ncategory: {'perception' if name == 'observe' else 'control'}\n---\n# {name}\n",
+                    encoding="utf-8",
+                )
+                (skill_dir / "policy.py").write_text(
+                    "def dispatch(context, args):\n    return {'ok': True}\n",
+                    encoding="utf-8",
+                )
+            result = Handler(
+                workspace_root=Path(tmp),
+                skills=SkillRegistry(roots=[skill_root], include_user=False),
+            ).run(
                 task="pick up the red block",
                 user_request="pick up the red block",
                 platform=DryRunPlatform(),
@@ -613,6 +706,62 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertFalse(result.success)
             self.assertEqual(result.review["verdict"], "research_needed")
             self.assertTrue(result.review["research_questions"])
+
+    def test_strategist_uses_grasp_target_learned_skill_for_web_order(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            skill_dir = Path(tmp) / "skills" / "control" / "grasp_target"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\n"
+                "name: grasp_target\n"
+                "category: control\n"
+                "description: grasp target\n"
+                "---\n\n"
+                "# Grasp Target\n",
+                encoding="utf-8",
+            )
+            registry = SkillRegistry(roots=[SHIPPED_ROOT, Path(tmp) / "skills"], include_user=False)
+            workspace = new_workspace("web_order_plan", root=Path(tmp) / "workspaces")
+
+            plan = Strategist().plan(
+                task="抓取「可口可乐 330ml」x1 交付顾客",
+                user_request=(
+                    "抓取「可口可乐 330ml」x1 交付顾客\n\n"
+                    'Order payload: [{"id": 1, "name": "可口可乐 330ml", "qty": 1}]'
+                ),
+                workspace=workspace,
+                skills=registry,
+            )
+
+        grasp_steps = [step for step in plan.steps if step.name == "grasp_target"]
+        self.assertEqual(len(grasp_steps), 1)
+        self.assertEqual(grasp_steps[0].args["target_prompt"], "可口可乐 330ml.")
+        self.assertEqual(grasp_steps[0].args["item_id"], 1)
+        self.assertFalse(plan.research_questions)
+
+    def test_server_bridge_prefers_skill_delivered_items(self) -> None:
+        from loopmaster_agentic.server_bridge import _result_delivered_items
+
+        result = RunResult(
+            task="order",
+            workspace="/tmp/run",
+            plan=Plan(task="order", goal="order"),
+            trace=[
+                TraceStep(
+                    index=1,
+                    skill="grasp_target",
+                    args={},
+                    result={"ok": True, "delivered_items": [{"id": 1, "delivered": 1}]},
+                    ok=True,
+                )
+            ],
+            review={"success": True},
+            success=True,
+        )
+
+        delivered = _result_delivered_items(result, [{"id": 1, "qty": 3}])
+
+        self.assertEqual(delivered, [{"id": 1, "delivered": 1}])
 
     def test_worker_resolves_dynamic_context_refs_between_skill_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -776,10 +925,10 @@ class LoopMasterAgenticTests(unittest.TestCase):
             old_root = os.environ.get("LOOPMASTER_SKILL_ROOT")
             os.environ["LOOPMASTER_SKILL_ROOT"] = str(Path(tmp) / "skills")
             try:
-                skill_dir = Path(os.environ["LOOPMASTER_SKILL_ROOT"]) / "learned" / "control" / "combo"
+                skill_dir = Path(os.environ["LOOPMASTER_SKILL_ROOT"]) / "control" / "combo"
                 skill_dir.mkdir(parents=True)
                 (skill_dir / "SKILL.md").write_text(
-                    "---\nname: combo\ncategory: learned/control\n---\n# Combo\n",
+                    "---\nname: combo\ncategory: control\n---\n# Combo\n",
                     encoding="utf-8",
                 )
                 (skill_dir / "policy.py").write_text(
@@ -824,7 +973,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                     SkillContext(platform=DryRunPlatform(), workspace=workspace),
                     {
                         "skill_name": "created_by_skill",
-                        "category": "learned/control",
+                        "category": "control",
                         "files": [
                             {
                                 "path": "SKILL.md",
@@ -832,7 +981,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                                     "---\n"
                                     "name: created_by_skill\n"
                                     "description: created by create_skill\n"
-                                    "category: learned/control\n"
+                                    "category: control\n"
                                     "---\n\n"
                                     "# Created\n"
                                 ),
@@ -871,11 +1020,11 @@ class LoopMasterAgenticTests(unittest.TestCase):
                     SkillContext(platform=DryRunPlatform(), workspace=workspace),
                     {
                         "skill_name": "bad_created_by_skill",
-                        "category": "learned/control",
+                        "category": "control",
                         "files": [
                             {
                                 "path": "SKILL.md",
-                                "content": "---\nname: bad_created_by_skill\ncategory: learned/control\n---\n# Bad\n",
+                                "content": "---\nname: bad_created_by_skill\ncategory: control\n---\n# Bad\n",
                             },
                             {"path": "policy.py", "content": "def run(context, args):\n    return {'ok': True}\n"},
                         ],
@@ -893,10 +1042,10 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIsNone(refreshed.get("bad_created_by_skill"))
 
     def test_perception_skills_merge_capture_image_memory_paths(self) -> None:
-        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import (
+        from loopmaster_agentic.skills.perception.detect_grasps.policy import (
             _merge_capture_image_memory as merge_anygrasp_capture,
         )
-        from loopmaster_agentic.skills.base.perception.grounded_sam2.policy import (
+        from loopmaster_agentic.skills.perception.grounded_sam2.policy import (
             _merge_capture_image_memory as merge_sam_capture,
         )
 
@@ -915,7 +1064,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(grasp_args["depth_path"], "/tmp/depth.png")
 
     def test_grounded_sam2_resolves_relative_paths_against_workspace(self) -> None:
-        from loopmaster_agentic.skills.base.perception.grounded_sam2.policy import _resolve_workspace_path
+        from loopmaster_agentic.skills.perception.grounded_sam2.policy import _resolve_workspace_path
 
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "run"
@@ -929,7 +1078,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         import numpy as np
         from PIL import Image
 
-        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import _load_points
+        from loopmaster_agentic.skills.perception.detect_grasps.policy import _load_points
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -962,7 +1111,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(source["seg_mask_path"], "")
 
     def test_detect_grasps_defaults_to_d435_intrinsics_config(self) -> None:
-        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import _d435_camera_params
+        from loopmaster_agentic.skills.perception.detect_grasps.policy import _d435_camera_params
 
         params = _d435_camera_params()
 
@@ -972,7 +1121,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertAlmostEqual(params["cy"], 242.75991821289062)
 
     def test_detect_grasps_rejects_empty_explicit_mask_region(self) -> None:
-        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import _should_reject_empty_explicit_region
+        from loopmaster_agentic.skills.perception.detect_grasps.policy import _should_reject_empty_explicit_region
 
         self.assertTrue(_should_reject_empty_explicit_region({"seg_mask_path": "/tmp/seg.png"}, 0))
         self.assertFalse(_should_reject_empty_explicit_region({"seg_mask_path": "/tmp/seg.png"}, 1))
@@ -991,6 +1140,58 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIn("Do not convert generic object detections", prompt)
         self.assertIn("Treat ambiguous perception annotations as notes or risks", prompt)
         self.assertIn("duration/velocity and final stopped state", prompt)
+        self.assertIn("For play_cache_traj", prompt)
+        self.assertIn("cannot produce in-trajectory grasp/contact/retention feedback", prompt)
+
+    def test_auditor_relaxes_play_cache_traj_feedback_requirements(self) -> None:
+        class StrictReplayAuditor:
+            def run_json(self, *, role: str, prompt: str, schema: dict[str, Any]) -> dict[str, Any]:
+                self.payload = json.loads(prompt)
+                return {
+                    "verdict": "retry",
+                    "root_cause": (
+                        "play_cache_traj reported replaying frames, but the trace has no "
+                        "in-trajectory feedback and no credible grasp success evidence. "
+                        "The return-to-init verification is stale."
+                    ),
+                    "next_action": "collect more feedback",
+                    "used_skills": ["play_cache_traj"],
+                    "used_control_skills": ["play_cache_traj"],
+                    "sim_leak": [],
+                    "research_questions": [],
+                    "success": False,
+                    "notes": [],
+                    "skill_updates": [],
+                    "skill_proposals": [],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = new_workspace("cache_replay_audit", root=Path(tmp))
+            trace = [
+                TraceStep(
+                    index=1,
+                    skill="play_cache_traj",
+                    args={"episode": 1},
+                    result={
+                        "ok": True,
+                        "episode": 1,
+                        "sent_frames": 550,
+                        "return_to_init": {"stop_motion": {"ok": True}, "init_arms": {"ok": False}},
+                    },
+                    ok=True,
+                )
+            ]
+            review = Auditor().review(
+                plan=Plan(task="play cached trajectory", goal="replay point 1"),
+                trace=trace,
+                workspace=workspace,
+                agent_client=StrictReplayAuditor(),
+            )
+
+        self.assertEqual(review["verdict"], "done")
+        self.assertTrue(review["success"])
+        self.assertEqual(review["root_cause"], "")
+        self.assertIn("play_cache_traj", review["used_control_skills"])
 
     def test_navigation_docs_do_not_present_status_as_clearance_gate(self) -> None:
         skill = SkillRegistry(include_user=False).get("navigation")
@@ -1002,7 +1203,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
     def test_detect_grasps_wraps_license_check_with_network_context(self) -> None:
         import subprocess
 
-        from loopmaster_agentic.skills.base.perception.detect_grasps import policy
+        from loopmaster_agentic.skills.perception.detect_grasps import policy
 
         events = []
 
@@ -1052,12 +1253,14 @@ class LoopMasterAgenticTests(unittest.TestCase):
             )
 
             self.assertTrue(result.success)
-            self.assertEqual(fake.roles, ["handler", "strategist", "worker", "auditor"])
+            self.assertEqual(fake.roles, ["handler", "strategist", "worker", "auditor", "handler_summary"])
             workspace = Path(result.workspace)
             self.assertTrue((workspace / "handler_agent.json").is_file())
             self.assertTrue((workspace / "strategist_agent.json").is_file())
             self.assertTrue((workspace / "worker_agent.json").is_file())
             self.assertTrue((workspace / "auditor_agent.json").is_file())
+            self.assertTrue((workspace / "handler_summary_agent.json").is_file())
+            self.assertEqual(result.review["response"], "fake handler summary for inspect robot")
 
     def test_handler_reruns_after_documentation_only_skill_update(self) -> None:
         class UpdatingAuditor(Auditor):
@@ -1093,7 +1296,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                             "files": [
                                 {
                                     "path": "SKILL.md",
-                                    "content": "---\nname: observe\ncategory: base/perception\n---\n# Observe\nDoc only.\n",
+                                    "content": "---\nname: observe\ncategory: perception\n---\n# Observe\nDoc only.\n",
                                 }
                             ],
                         }
@@ -1105,7 +1308,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             observe_dir = root / "perception" / "observe"
             observe_dir.mkdir(parents=True)
             (observe_dir / "SKILL.md").write_text(
-                "---\nname: observe\ncategory: base/perception\n---\n# Observe\n",
+                "---\nname: observe\ncategory: perception\n---\n# Observe\n",
                 encoding="utf-8",
             )
             (observe_dir / "policy.py").write_text(
@@ -1153,7 +1356,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             (skill_dir / "SKILL.md").write_text(
                 "---\n"
                 "name: arg_skill\n"
-                "category: learned/control\n"
+                "category: control\n"
                 "args:\n"
                 "  side: string\n"
                 "  cycles: integer\n"
@@ -1709,7 +1912,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
             skill_dir = root / "base" / "perception" / "toy"
             skill_dir.mkdir(parents=True)
             (skill_dir / "SKILL.md").write_text(
-                "---\nname: toy\ndescription: toy\ncategory: base/perception\n---\n\n# Toy\n",
+                "---\nname: toy\ndescription: toy\ncategory: perception\n---\n\n# Toy\n",
                 encoding="utf-8",
             )
             (skill_dir / "policy.py").write_text(
@@ -1744,14 +1947,14 @@ class LoopMasterAgenticTests(unittest.TestCase):
             old_root = os.environ.get("LOOPMASTER_SKILL_ROOT")
             os.environ["LOOPMASTER_SKILL_ROOT"] = str(Path(tmp) / "user_skills")
             try:
-                registry = SkillRegistry(roots=[Path(tmp) / "base"], include_user=True)
+                registry = SkillRegistry(roots=[Path(tmp) / "skills"], include_user=True)
                 workspace = _FakeWorkspace(Path(tmp))
                 review = {
                     "skill_proposals": [
                         {
                             "kind": "new_skill",
                             "skill_name": "toy_new",
-                            "category": "learned/control",
+                            "category": "control",
                             "rationale": "test new skill",
                             "files": [
                                 {
@@ -1760,7 +1963,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                                         "---\n"
                                         "name: toy_new\n"
                                         "description: toy new\n"
-                                        "category: learned/control\n"
+                                        "category: control\n"
                                         "---\n\n"
                                         "# Toy New\n"
                                     ),
@@ -1791,18 +1994,18 @@ class LoopMasterAgenticTests(unittest.TestCase):
             old_root = os.environ.get("LOOPMASTER_SKILL_ROOT")
             os.environ["LOOPMASTER_SKILL_ROOT"] = str(Path(tmp) / "user_skills")
             try:
-                registry = SkillRegistry(roots=[Path(tmp) / "base"], include_user=True)
+                registry = SkillRegistry(roots=[Path(tmp) / "skills"], include_user=True)
                 workspace = _FakeWorkspace(Path(tmp))
                 review = {
                     "skill_proposals": [
                         {
                             "kind": "new_skill",
                             "skill_name": "bad_new",
-                            "category": "learned/control",
+                            "category": "control",
                             "files": [
                                 {
                                     "path": "SKILL.md",
-                                    "content": "---\nname: bad_new\ncategory: learned/control\n---\n# Bad\n",
+                                    "content": "---\nname: bad_new\ncategory: control\n---\n# Bad\n",
                                 },
                                 {"path": "policy.py", "content": "def run(context, args):\n    return {'ok': True}\n"},
                             ],
@@ -2012,6 +2215,12 @@ class _FakeSubagentClient:
                 "notes": ["fake auditor review"],
                 "skill_updates": [],
                 "skill_proposals": [],
+                "_codex": codex,
+            }
+        if role == "handler_summary":
+            return {
+                "response": f"fake handler summary for {payload['user_request']}",
+                "notes": ["fake handler summary"],
                 "_codex": codex,
             }
         raise AssertionError(f"unexpected role {role}")

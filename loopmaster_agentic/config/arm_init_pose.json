@@ -1,13 +1,13 @@
 {
-  "source": "_grasp_runs/capture_anygrasp_grasp_pose-20260711-011157-48ac88/grasp_pose_summary.json:init_right_arm_positions",
+  "source": "DEFAULT_RIGHT_QPOS / DEFAULT_LEFT_QPOS",
   "description": "Joint-space initialization pose applied to both arms before grasp motion planning.",
   "positions": {
-    "joint_1": -0.1356145590543747,
-    "joint_2": -1.3578622341156006,
-    "joint_3": -0.91,
-    "joint_4": 1.2438009977340698,
-    "joint_5": 0.010490577667951584,
-    "joint_6": 0.026131074875593185,
-    "gripper": -0.21229113638401031
+    "joint_1": 0.0,
+    "joint_2": -0.5,
+    "joint_3": -0.5,
+    "joint_4": 0.0,
+    "joint_5": 0.0,
+    "joint_6": 0.0,
+    "gripper": -5
   }
 }
