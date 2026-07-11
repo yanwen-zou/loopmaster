@@ -53,15 +53,19 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 # 网站对顾客展示中文名(name)，与 agent 机器人交互只用英文小写下划线(name_en / sku)。
 # 中英映射就存在 products.name_en 这一列，下单时据此把发给 agent 的字段全部转成英文。
 # 字段顺序：(中文名, 英文名 name_en, 分类, 售价, 库存, emoji)
+# 字段顺序：(中文名, 英文名 name_en, 分类, 售价, 库存, emoji, 图片文件名@static/assets/)
 SEED_PRODUCTS = [
-    ("可乐",   "cola",          "饮料",   3.0, 20, "🥤"),
-    ("红牛",   "red_bull",      "饮料",   6.0, 15, "🐂"),
-    ("瓶装水", "bottled_water", "饮料",   2.0, 30, "💧"),
-    ("火腿肠", "ham_sausage",   "零食",   2.0, 25, "🌭"),
-    ("香肠",   "sausage",       "零食",   3.0, 20, "🍖"),
-    ("饼干",   "biscuit",       "零食",   5.0, 18, "🍪"),
-    ("蛋糕",   "cake",          "零食",   8.0, 12, "🍰"),
-    ("自定义", "custom",        "自定义", 0.0, 99, "✨"),
+    ("可口可乐",      "cola",           "饮料",   3.0, 20, "🥤", "cola.jpg"),
+    ("易拉罐装红牛",  "red_bull",       "饮料",   6.0, 15, "🐂", "red_bull.jpg"),
+    ("农夫山泉矿泉水", "bottled_water",  "饮料",   2.0, 30, "💧", "bottled_water.jpg"),
+    ("纯牛奶",        "milk",           "饮料",   5.0, 15, "🥛", "milk.jpg"),
+    ("双汇火腿肠",    "ham_sausage",    "零食",   2.0, 25, "🌭", "ham_sausage.jpg"),
+    ("干脆面",        "cracker_noodle", "零食",   3.0, 20, "🍜", "cracker_noodle.jpg"),
+    ("旺仔小馒头",    "wangzai_bun",    "零食",   4.0, 18, "🍘", "wangzai_bun.jpg"),
+    ("绿豆饼",        "mung_bean_cake", "零食",   3.0, 18, "🥮", "mung_bean_cake.jpg"),
+    ("芝士夹心饼干",  "cheese_biscuit", "零食",   5.0, 18, "🧀", "cheese_biscuit.jpg"),
+    ("巧克力棒",      "chocolate_bar",  "零食",   6.0, 15, "🍫", "chocolate_bar.jpg"),
+    ("自定义",        "custom",         "自定义", 0.0, 99, "✨", ""),
 ]
 # 分类中英映射（发给 agent / 存英文用）
 CATEGORY_EN = {"饮料": "drink", "零食": "snack", "自定义": "custom"}
@@ -116,6 +120,7 @@ def init_db():
             price REAL NOT NULL,
             stock INTEGER NOT NULL DEFAULT 0,
             emoji TEXT DEFAULT '📦',
+            image TEXT NOT NULL DEFAULT '',      -- 商品图（static/assets/ 下的文件名，空则用 emoji）
             created_at TEXT NOT NULL
         );
 
@@ -179,22 +184,26 @@ def init_db():
     for k in ("page_visits", "arm_exec", "arm_success", "arm_fail", "pickup_flag"):
         db.execute("INSERT OR IGNORE INTO stats(key, value) VALUES(?, 0)", (k,))
 
-    # 老库迁移：给已存在的 products 表补 name_en 列（CREATE TABLE IF NOT EXISTS 不会改旧表）
+    # 老库迁移：给已存在的 products 表补 name_en / image 列（CREATE TABLE IF NOT EXISTS 不改旧表）
     cols = [r[1] for r in db.execute("PRAGMA table_info(products)").fetchall()]
     if "name_en" not in cols:
         db.execute("ALTER TABLE products ADD COLUMN name_en TEXT NOT NULL DEFAULT ''")
+    if "image" not in cols:
+        db.execute("ALTER TABLE products ADD COLUMN image TEXT NOT NULL DEFAULT ''")
 
-    # 初始/重置商品仓库：只要新仓库的 SKU 不全在库里，就清空重灌为 SEED_PRODUCTS（一次性）
-    have = {r[0] for r in db.execute("SELECT name_en FROM products").fetchall()}
-    want = {en for (_n, en, _c, _p, _s, _e) in SEED_PRODUCTS}
-    if not want.issubset(have):
+    # 初始/重置商品仓库：新仓库的 SKU 不全在库、或已入库商品还没图，就清空重灌为 SEED_PRODUCTS
+    rows = db.execute("SELECT name_en, image FROM products").fetchall()
+    have = {r[0] for r in rows}
+    want = {en for (_n, en, _c, _p, _s, _e, _img) in SEED_PRODUCTS}
+    need_img = any((not r[1]) for r in rows if r[0] and r[0] != "custom")
+    if (not want.issubset(have)) or need_img:
         db.execute("DELETE FROM products")
         db.execute("DELETE FROM sqlite_sequence WHERE name='products'")
         ts = now_str()
         db.executemany(
-            "INSERT INTO products(name,name_en,category,price,stock,emoji,created_at) "
-            "VALUES(?,?,?,?,?,?,?)",
-            [(n, en, c, p, s, e, ts) for (n, en, c, p, s, e) in SEED_PRODUCTS],
+            "INSERT INTO products(name,name_en,category,price,stock,emoji,image,created_at) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            [(n, en, c, p, s, e, img, ts) for (n, en, c, p, s, e, img) in SEED_PRODUCTS],
         )
     db.commit()
     db.close()
@@ -565,7 +574,7 @@ def api_arm_report():
 # ============================================================================
 DB_TABLES = {
     "products": {"pk": "id",  "auto": True,
-                 "cols": {"name", "name_en", "category", "price", "stock", "emoji", "created_at"}},
+                 "cols": {"name", "name_en", "category", "price", "stock", "emoji", "image", "created_at"}},
     "users":    {"pk": "id",  "auto": False,
                  "cols": {"id", "ip", "coins", "visits", "created_at", "last_seen"}},
     "orders":   {"pk": "id",  "auto": True,

@@ -126,6 +126,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
   background:linear-gradient(135deg,#eef4ff,#e0eaff);
   border-radius:16px;padding:20px 0;margin-bottom:2px;
 }
+.card .emoji.img{padding:0;background:none}
+.card .emoji.img img{width:100%;height:130px;object-fit:cover;border-radius:14px;display:block}
 .card .name{font-weight:700;font-size:15px}
 .card .row{display:flex;align-items:center;justify-content:space-between}
 .card .price{

@@ -224,7 +224,7 @@ function render(){
       const out = p.stock <= 0;
       html += `
       <div class="card ${out?'out':''}" ${out?'':`onclick="askItem(${p.id})"`}>
-        <div class="emoji">${p.emoji}</div>
+        ${p.image ? `<div class="emoji img"><img src="/static/assets/${p.image}" alt="${p.name}" loading="lazy"></div>` : `<div class="emoji">${p.emoji}</div>`}
         <div class="name">${p.name}</div>
         <div class="row">
           <span class="price">${isCustom ? '按需' : p.price.toFixed(1)}</span>
@@ -252,7 +252,9 @@ function askItem(id){
   if(!p || p.stock<=0){ toast('已售罄', 'err'); return; }
   MODAL_ID = id;
   MODAL_QTY = 1;
-  document.getElementById('mEmoji').textContent = p.emoji;
+  const mE = document.getElementById('mEmoji');
+  if(p.image){ mE.innerHTML = `<img src="/static/assets/${p.image}" alt="${p.name}" style="width:130px;height:130px;object-fit:cover;border-radius:18px">`; }
+  else { mE.textContent = p.emoji; }
   document.getElementById('mName').textContent = p.name;
   document.getElementById('mPrice').textContent = p.price.toFixed(1);
   // 自定义商品：显示需求输入框
