@@ -27,10 +27,8 @@
 <div id="loginView">
   <div class="login-card">
     <h1>👋 欢迎光临麦西 Messi</h1>
-    <p>移动升降底盘 + 双臂抓取。<b>点选商品 → 确认 → 机械臂即刻为你抓取</b>，无需购物车。<br>
-       老用户输入用户名即可登录（余额保留）；新用户输入名字即注册开户。</p>
-    <div class="gift">🎁 新用户注册即送 <b>200 月亮币</b>（1 月亮币 = 1 元人民币）<br>
-       💾 所有余额、订单、统计永久保存，重启不丢失</div>
+    <p><b>点选商品 → 确认 → 机械臂即刻抓取</b>，无需购物车。</p>
+    <div class="gift">🎁 新用户注册即送 <b>200 月亮币</b>（1 月亮币 = 1 元）</div>
     <label>用户名 / ID</label>
     <input id="uidInput" placeholder="老用户输原用户名登录，新用户输名字注册" autocomplete="off">
     <button class="btn mt" onclick="login()">进入商店 →</button>
@@ -85,12 +83,50 @@
 
 <div id="toast" class="toast"></div>
 
-<!-- 项目页脚（精简：详细介绍见「关于我们」页） -->
-<footer class="site-footer slim">
-  <div class="foot-wrap foot-slim">
-    <div class="foot-brand">麦西 <span class="mx">Messi</span></div>
-    <span class="team">队伍 · <b>LoopMaster</b> · 可自进化的卖货机器人</span>
-    <a href="/about" class="about-link">关于我们 →</a>
+<!-- 项目页脚：品牌简介 + 技术亮点（排版同「关于我们」） -->
+<footer class="site-footer">
+  <div class="foot-wrap">
+    <div class="about-hero">
+      <h1>麦西 <span class="mx">Messi</span></h1>
+      <p>一款可自进化的卖货机器人。我们开源一套移动升降双臂机器人本体
+        <b>Hei-Rebot-Lift</b>，以及一个小老板都可以教会的自进化 Agent 学习系统 <b>LoopMaster</b>。</p>
+    </div>
+
+    <div class="about-tech">
+      <div class="about-col">
+        <h4>🦾 一、全开源本体 + SDK</h4>
+        <ul>
+          <li>手搓移动升降<b>双臂本体</b></li>
+          <li>全向底盘 <b>SLAM 导航</b></li>
+          <li>6 轴机械臂<b>运动学控制</b></li>
+          <li><b>VR 全身</b>一体遥操作</li>
+        </ul>
+      </div>
+      <div class="about-col">
+        <h4>🧠 二、操作与自进化框架</h4>
+        <ul>
+          <li><b>空间语义</b>定位抓取</li>
+          <li>全栈<b>底层 Skills</b></li>
+          <li><b>Skills 化</b>购买页</li>
+          <li><b>自进化 Agent</b> 框架</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="foot-bar">
+      <span class="team">队伍 · <b>LoopMaster</b></span>
+      <div class="foot-links">
+        <a href="/about">关于我们 →</a>
+        <a href="https://github.com/lipengdong/hei-rebot-lift" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.94 10.94 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
+          本体 Hei-Rebot-Lift
+        </a>
+        <a href="https://github.com/yanwen-zou/loopmaster" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.94 10.94 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>
+          算法 LoopMaster
+        </a>
+      </div>
+    </div>
   </div>
 </footer>
 
@@ -236,6 +272,18 @@ function closeItem(){
 }
 
 document.getElementById('uidInput').addEventListener('keydown', e=>{ if(e.key==='Enter') login(); });
+
+// 返回首页 = 回到「输入名字」页：清空登录态、隐藏选购页
+function resetToLogin(){
+  USER = null;
+  document.getElementById('loginView').classList.remove('hidden');
+  document.getElementById('shopView').classList.add('hidden');
+  document.getElementById('walletBox').style.display = 'none';
+  const inp = document.getElementById('uidInput'); if(inp) inp.value = '';
+}
+// 手机返回手势 / 浏览器前进后退会从 bfcache 恢复旧 DOM（停留在选购页）；
+// pageshow.persisted=true 时强制重置回输入名字页。
+window.addEventListener('pageshow', e => { if(e.persisted) resetToLogin(); });
 </script>
 </body>
 </html>
