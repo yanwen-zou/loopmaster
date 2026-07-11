@@ -21,6 +21,7 @@
       <a href="/dashboard">数据大屏</a>
       <a href="/admin">后台</a>
       <a href="/about">关于我们</a>
+      <a href="#" onclick="logout();return false;">退出</a>
     </div>
   </div>
 </div>
@@ -146,14 +147,25 @@ function toast(msg, type){
   window._tt = setTimeout(()=>t.className='toast', 2600);
 }
 
+const LS_KEY = 'messi_user';   // 本设备记住的登录用户名
+
 async function login(){
   const uid = document.getElementById('uidInput').value.trim();
   if(!uid){ toast('请输入用户 ID', 'err'); return; }
-  const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({user_id: uid})});
-  const d = await r.json();
-  if(!d.ok){ toast(d.msg||'登录失败', 'err'); return; }
+  await doLogin(uid, false);
+}
+
+// silent=true 用于刷新后的自动登录（不弹欢迎语）
+async function doLogin(uid, silent){
+  let d;
+  try{
+    const r = await fetch('/api/login', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id: uid})});
+    d = await r.json();
+  }catch(e){ if(!silent) toast('网络错误', 'err'); return false; }
+  if(!d.ok){ if(!silent) toast(d.msg||'登录失败', 'err'); localStorage.removeItem(LS_KEY); return false; }
   USER = {user_id: d.user_id, coins: d.coins};
+  localStorage.setItem(LS_KEY, d.user_id);   // 记住登录，刷新/返回不用重输
   document.getElementById('loginView').classList.add('hidden');
   document.getElementById('shopView').classList.remove('hidden');
   document.getElementById('walletBox').style.display = 'flex';
@@ -161,9 +173,19 @@ async function login(){
   document.getElementById('siteFooter').style.display = 'none';   // 选购页不显示项目简介页脚
   document.getElementById('uidLabel').textContent = d.user_id;
   updateWallet();
-  if(d.is_new) toast('🎁 欢迎新用户！已到账 '+d.gift+' 月亮币', 'ok');
-  else toast('欢迎回来，'+d.user_id+'（IP '+d.ip+'）', 'ok');
+  if(!silent){
+    if(d.is_new) toast('🎁 欢迎新用户！已到账 '+d.gift+' 月亮币', 'ok');
+    else toast('欢迎回来，'+d.user_id+'（IP '+d.ip+'）', 'ok');
+  }
   loadProducts();
+  return true;
+}
+
+// 退出：清除本设备登录记忆，回到输入名字页（供换账号用）
+function logout(){
+  localStorage.removeItem(LS_KEY);
+  resetToLogin();
+  toast('已退出，可换账号登录', 'ok');
 }
 
 function updateWallet(){ document.getElementById('coinLabel').textContent = USER.coins.toFixed(0); }
@@ -287,9 +309,11 @@ function resetToLogin(){
   document.getElementById('siteFooter').style.display = '';       // 回到输入名字页恢复页脚
   const inp = document.getElementById('uidInput'); if(inp) inp.value = '';
 }
-// 手机返回手势 / 浏览器前进后退会从 bfcache 恢复旧 DOM（停留在选购页）；
-// pageshow.persisted=true 时强制重置回输入名字页。
-window.addEventListener('pageshow', e => { if(e.persisted) resetToLogin(); });
+// 登录状态监测：本设备记住过用户名就自动登录，刷新/返回都不用重输
+(function(){
+  const saved = localStorage.getItem(LS_KEY);
+  if(saved) doLogin(saved, true);
+})();
 </script>
 </body>
 </html>
