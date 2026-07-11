@@ -20,6 +20,11 @@ REQUIRED_MODULES = (
 
 def dispatch(context, args):
     args = _merge_capture_image_memory(context, dict(args or {}))
+    if "_workspace_root" not in args:
+        workspace = getattr(context, "workspace", None)
+        root = getattr(workspace, "root", None)
+        if root is not None:
+            args["_workspace_root"] = str(root)
     repo_root = Path(args.get("repo_root") or _default_repo_root()).expanduser().resolve()
     if not repo_root.is_dir():
         return {"ok": False, "error": f"Grounded-SAM2 repo not found: {repo_root}"}
@@ -71,15 +76,20 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
     from sam2.sam2_image_predictor import SAM2ImagePredictor
     from utils.supervision_utils import CUSTOM_COLOR_MAP
 
-    img_path = Path(args.get("img_path") or repo_root / "notebooks" / "images" / "truck.jpg").expanduser()
-    if not img_path.is_absolute():
-        img_path = (repo_root / img_path).resolve()
+    workspace_root = _workspace_root(args)
+    img_path = _resolve_workspace_path(
+        args.get("img_path") or repo_root / "notebooks" / "images" / "truck.jpg",
+        workspace_root=workspace_root,
+        repo_root=repo_root,
+    )
     if not img_path.is_file():
         raise FileNotFoundError(f"image not found: {img_path}")
 
-    output_dir = Path(args.get("output_dir") or repo_root / "outputs" / "grounded_sam2_skill").expanduser()
-    if not output_dir.is_absolute():
-        output_dir = (repo_root / output_dir).resolve()
+    output_dir = _resolve_workspace_path(
+        args.get("output_dir") or "grounded_sam2",
+        workspace_root=workspace_root,
+        repo_root=repo_root,
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
 
     text_prompt = _normalize_prompt(str(args.get("text_prompt") or "car. tire."))
@@ -163,6 +173,22 @@ def _run_grounded_sam2(repo_root: Path, args: dict[str, Any]) -> dict[str, Any]:
     with open(output_dir / "grounded_sam2_results.json", "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2)
     return result
+
+
+def _workspace_root(args: dict[str, Any]) -> Path | None:
+    value = args.get("_workspace_root")
+    if not value:
+        return None
+    return Path(value).expanduser().resolve()
+
+
+def _resolve_workspace_path(value: Any, *, workspace_root: Path | None, repo_root: Path) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    if workspace_root is not None:
+        return (workspace_root / path).resolve()
+    return (repo_root / path).resolve()
 
 
 def _write_masks(output_dir: Path, masks: Any) -> Any:

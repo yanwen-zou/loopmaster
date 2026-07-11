@@ -11,6 +11,7 @@ from typing import Any
 ARM_JOINTS = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6", "gripper")
 DEFAULT_ARM_QPOS = (0.0, -0.5, -0.5, 0.0, 0.0, 0.0, 0.0)
 HEAD_CAMERA_EXTRINSICS_PATH = Path(__file__).resolve().parents[1] / "config" / "head_camera_extrinsics.json"
+MIN_ARM_TARGET_Z = 0.06
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,9 @@ def solve_arm_ee_mink(
     elif input_frame.lower() in {"arm", "arm_base", "base", f"{side}_arm"}:
         target_arm = target_input
     else:
-        raise ValueError("input_frame must be head_camera or arm")
+        raise ValueError("input_frame must be head_camera, left_arm, or right_arm")
+    target_arm_unclipped = [row[:] for row in target_arm]
+    target_arm_clipped = _clip_arm_target_z(target_arm)
 
     sim = _sim()
     q = sim.model.qpos0.copy()
@@ -131,6 +134,18 @@ def solve_arm_ee_mink(
             "task_position_error_m": last_error,
             "orientation_cost": max(float(orientation_cost), 0.0),
             "preserve_current_orientation": bool(preserve_current_orientation),
+            "arm_target_z_min_m": MIN_ARM_TARGET_Z,
+            "arm_target_z_clipped": target_arm_clipped,
+            "unclipped_arm_position": [
+                float(target_arm_unclipped[0][3]),
+                float(target_arm_unclipped[1][3]),
+                float(target_arm_unclipped[2][3]),
+            ],
+            "clipped_arm_position": [
+                float(target_arm[0][3]),
+                float(target_arm[1][3]),
+                float(target_arm[2][3]),
+            ],
             "target_world_position": target_pos,
             "reached_world_position": reached,
         },
@@ -210,6 +225,13 @@ def _arm_pose_to_world(side: str, pose_arm: list[list[float]]) -> list[list[floa
     t_world_arm = _identity()
     t_world_arm[1][3] = offset_y
     return _matrix_multiply(t_world_arm, pose_arm)
+
+
+def _clip_arm_target_z(pose_arm: list[list[float]]) -> bool:
+    if float(pose_arm[2][3]) >= MIN_ARM_TARGET_Z:
+        return False
+    pose_arm[2][3] = MIN_ARM_TARGET_Z
+    return True
 
 
 def _current_ee_pose_arm(sim: _MinkSim, configuration: Any, side: str) -> list[list[float]]:

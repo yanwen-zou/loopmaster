@@ -28,6 +28,7 @@ DEFAULT_ARM_QPOS = (0.0, -0.5, -0.5, 0.0, 0.0, 0.0, GRIPPER_CLOSED_QPOS)
 HEAD_CAMERA_EXTRINSICS_PATH = Path(__file__).resolve().parents[1] / "config" / "head_camera_extrinsics.json"
 DEFAULT_CONDA_ENV = "hei-rebot-vr"
 IK_RESULT_PREFIX = "LOOPMASTER_IK_RESULT_JSON="
+MIN_ARM_TARGET_Z = 0.06
 
 
 @dataclass(frozen=True)
@@ -92,7 +93,9 @@ def _solve_arm_ee_in_process(
     elif input_frame.lower() in {"arm", "arm_base", "base", f"{side}_arm"}:
         target_arm = target_input
     else:
-        raise ValueError("input_frame must be head_camera or arm")
+        raise ValueError("input_frame must be head_camera, left_arm, or right_arm")
+    target_arm_unclipped = target_arm.copy()
+    target_arm_clipped = _clip_arm_target_z(target_arm)
 
     solver = _solver(side)
     current_full_q = _current_full_q(side, current_positions)
@@ -118,7 +121,13 @@ def _solve_arm_ee_in_process(
         target_camera_pose=target_camera_pose.tolist() if target_camera_pose is not None else None,
         positions=positions,
         ik_success=bool(info.get("success", False)),
-        ik_info=_jsonable_info(info),
+        ik_info={
+            **_jsonable_info(info),
+            "arm_target_z_min_m": MIN_ARM_TARGET_Z,
+            "arm_target_z_clipped": target_arm_clipped,
+            "unclipped_arm_position": target_arm_unclipped[:3, 3].astype(float).tolist(),
+            "clipped_arm_position": target_arm[:3, 3].astype(float).tolist(),
+        },
         transform=transform_info,
     )
 
@@ -276,6 +285,13 @@ def arm_to_head_camera_transform(side: str):
 def load_head_camera_extrinsics(path: Path | None = None) -> dict[str, Any]:
     extrinsics_path = path or HEAD_CAMERA_EXTRINSICS_PATH
     return json.loads(extrinsics_path.read_text(encoding="utf-8"))
+
+
+def _clip_arm_target_z(pose_arm: Any) -> bool:
+    if float(pose_arm[2, 3]) >= MIN_ARM_TARGET_Z:
+        return False
+    pose_arm[2, 3] = MIN_ARM_TARGET_Z
+    return True
 
 
 def rotation_y(angle_rad: float):

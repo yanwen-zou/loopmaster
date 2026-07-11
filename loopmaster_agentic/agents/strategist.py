@@ -258,6 +258,7 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
                 "category": skill.category,
                 "description": skill.description,
                 "args": skill.frontmatter.get("args", {}),
+                "usage_markdown": _skill_usage_markdown(skill),
                 "is_user": skill.is_user,
             }
             for skill in skills
@@ -265,6 +266,13 @@ def _strategist_prompt(*, task: str, user_request: str, skills: list[Any], candi
         "candidate_plan": candidate_plan,
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
+
+
+def _skill_usage_markdown(skill: Any, *, limit: int = 1600) -> str:
+    body = str(getattr(skill, "body", "") or "").strip()
+    if len(body) <= limit:
+        return body
+    return body[: limit - 3].rstrip() + "..."
 
 
 def _strategist_retry_prompt(
@@ -282,16 +290,20 @@ def _strategist_retry_prompt(
             "Inspect the trace, correct fixable skill argument/schema mistakes, and return a revised "
             "registry-grounded plan. Use only the provided skill names and each skill's documented args. "
             "Do not ask the user to fix schema mismatches that you can correct. Keep stop_motion at the "
-            "end when any control skill appears. If the failure is caused by a repository-local "
-            "skill output or documentation defect, identify that skill repair in risks or "
+            "end when any control skill appears. If a skill's SKILL.md was updated after the previous "
+            "failure, use its current usage_markdown to change call arguments, path forms, frame names, "
+            "or step sequencing as documented. If the same skill still fails with the same root cause "
+            "after following updated documentation, call out that the skill runtime may need a policy.py "
+            "repair instead of repeating identical arguments. If the failure is caused by a "
+            "repository-local skill output or documentation defect, identify that skill repair in risks or "
             "subagent_notes instead of turning it into a user research question. For motion retries, "
             "do not treat action_sent alone as success; require observe feedback that the robot "
             "state reached or moved toward the target, and add dwell/settling time when commands "
             "were sent too quickly for physical motion. Feedback can lag commands, so prefer "
-            "multi-sample trends/ranges over single-sample exact equality. Return only JSON "
+            "multi-sample trends/ranges over single-sample exact equality. "
             "Later step args may reference prior skill results with {\"$ref\":\"skill.path.to.value\"} "
             "or string templates like ${skill.path.to.value}. "
-            "matching the schema."
+            "Return only JSON matching the schema."
         ),
         "task": task,
         "user_request": user_request,
@@ -301,6 +313,7 @@ def _strategist_retry_prompt(
                 "category": skill.category,
                 "description": skill.description,
                 "args": skill.frontmatter.get("args", {}),
+                "usage_markdown": _skill_usage_markdown(skill),
                 "is_user": skill.is_user,
             }
             for skill in skills
@@ -311,7 +324,7 @@ def _strategist_retry_prompt(
             "For move_arm_joints use args {\"side\": \"left\"|\"right\"|\"both\", \"positions\": {...}} "
             "or positions as a 7-value numeric array. For move_arm_ee use args "
             "{\"side\":\"left\"|\"right\", \"pose\": {\"position\": [x,y,z], \"rpy\": [r,p,y]}, "
-            "\"input_frame\":\"head_camera\"|\"arm\"}. Do not use arm=... for move_arm_joints."
+            "\"input_frame\":\"head_camera\"|\"left_arm\"|\"right_arm\"}. Do not use arm=... for move_arm_joints."
         ),
     }
     return json.dumps(payload, indent=2, ensure_ascii=False, default=str)
@@ -626,7 +639,7 @@ def _maybe_add_arm_ee(
             {
                 "side": side,
                 "pose": pose,
-                "input_frame": "head_camera" if "camera" in text or "相机" in text else "arm",
+                "input_frame": "head_camera" if "camera" in text or "相机" in text else f"{side}_arm",
             },
             "execute explicitly requested end-effector pose target through IK",
         )

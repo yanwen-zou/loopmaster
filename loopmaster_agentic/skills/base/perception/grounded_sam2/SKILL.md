@@ -35,6 +35,10 @@ also stores the latest result in `context.memory["grounded_sam2"]`. If `img_path
 is omitted and `capture_image` already ran, the skill uses
 `context.memory["capture_image"]["rgb"]["path"]`.
 
+Relative `img_path` and `output_dir` values are resolved against the current
+LoopMaster workspace/run directory, not against `third_party/Grounded-SAM-2`.
+Resolve the image to an existing absolute path before invoking third-party code.
+
 By default the Hugging Face grounding model is loaded with
 `local_files_only=true` to avoid network failures during robot runs. Pass
 `local_files_only=false` only when you intentionally want to download or refresh

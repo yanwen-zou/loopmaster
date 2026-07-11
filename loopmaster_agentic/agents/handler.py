@@ -101,6 +101,8 @@ class Handler:
                     agent_client=self.agent_client,
                 )
                 notes.extend(note for note in plan.subagent_notes if "Codex profile" in note)
+                if progress is not None:
+                    progress(f"strategist plan: {_format_plan_steps(plan)}")
                 trace = []
                 seen_failures: set[tuple[str, str, str]] = set()
                 while True:

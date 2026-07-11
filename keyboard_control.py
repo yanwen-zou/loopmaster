@@ -29,6 +29,7 @@ Chassis:
 
 EE mode (--ee):
   w/s: ee x +/-     a/d: ee y +/-     q/e: ee z +/-
+  t/g: roll +/-     y/h: pitch +/-    u/j: yaw +/-
   l/r: select left/right arm
 
 Arm joints:
@@ -117,6 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--large-joint-step", type=float, default=0.10, help="Large arm joint increment.")
     parser.add_argument("--ee", action="store_true", help="Use w/a/s/d/q/e to test move_arm_ee instead of chassis.")
     parser.add_argument("--ee-step", type=float, default=0.01, help="End-effector Cartesian increment in meters.")
+    parser.add_argument("--ee-rot-step", type=float, default=0.05, help="End-effector RPY increment in radians.")
     parser.add_argument("--ee-frame", choices=("arm", "head_camera"), default="arm", help="Input frame for EE targets.")
     parser.add_argument("--ee-x", type=float, default=0.2, help="Initial EE target x.")
     parser.add_argument("--ee-y", type=float, default=0.0, help="Initial EE target y.")
@@ -143,14 +145,14 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _refresh_arm_positions(context, state, quiet=True)
-        _print_live_joint_status(state)
+        _print_live_status(state, ee_mode=args.ee)
         refresh_interval = 1.0 / args.joint_refresh_hz if args.joint_refresh_hz > 0 else None
         next_refresh = time.monotonic() + (refresh_interval or 0.0)
         with RawTerminal() as terminal:
             while True:
                 if refresh_interval is not None and time.monotonic() >= next_refresh:
                     _refresh_arm_positions(context, state, quiet=True)
-                    _print_live_joint_status(state)
+                    _print_live_status(state, ee_mode=args.ee)
                     next_refresh = time.monotonic() + refresh_interval
                 key = terminal.read_key(max(args.poll, 0.001))
                 if key is None:
@@ -186,8 +188,8 @@ def _handle_key(
     state: TeleopState,
 ) -> None:
     lowered = key.lower()
-    if getattr(args, "ee", False) and lowered in {"w", "s", "a", "d", "q", "e"}:
-        ee_motion = {
+    if getattr(args, "ee", False):
+        ee_position_motion = {
             "w": (0, 1.0),
             "s": (0, -1.0),
             "a": (1, 1.0),
@@ -195,9 +197,38 @@ def _handle_key(
             "q": (2, 1.0),
             "e": (2, -1.0),
         }
-        axis, direction = ee_motion[lowered]
-        _move_selected_ee(registry, context, args, state, axis, direction * getattr(args, "ee_step", 0.01))
-        return
+        if lowered in ee_position_motion:
+            axis, direction = ee_position_motion[lowered]
+            _move_selected_ee(
+                registry,
+                context,
+                args,
+                state,
+                "position",
+                axis,
+                direction * getattr(args, "ee_step", 0.01),
+            )
+            return
+        ee_rotation_motion = {
+            "t": (0, 1.0),
+            "g": (0, -1.0),
+            "y": (1, 1.0),
+            "h": (1, -1.0),
+            "u": (2, 1.0),
+            "j": (2, -1.0),
+        }
+        if lowered in ee_rotation_motion:
+            axis, direction = ee_rotation_motion[lowered]
+            _move_selected_ee(
+                registry,
+                context,
+                args,
+                state,
+                "rpy",
+                axis,
+                direction * getattr(args, "ee_rot_step", 0.05),
+            )
+            return
 
     chassis = {
         "w": (args.linear_speed, 0.0, 0.0),
@@ -218,11 +249,11 @@ def _handle_key(
         return
     if lowered in ARM_SIDE_KEYS:
         state.side = ARM_SIDE_KEYS[lowered]
-        _print_status(state)
+        _print_status(state, ee_mode=getattr(args, "ee", False))
         return
     if key in {"1", "2", "3", "4", "5", "6", "7"}:
         state.joint_index = int(key) - 1
-        _print_status(state)
+        _print_status(state, ee_mode=getattr(args, "ee", False))
         return
     if key in {"+", "=", "-", "_", "[", "]"}:
         step = args.large_joint_step if key in {"[", "]"} else args.joint_step
@@ -231,7 +262,7 @@ def _handle_key(
         return
     if lowered == "o":
         _refresh_arm_positions(context, state, quiet=False)
-        _print_status(state)
+        _print_status(state, ee_mode=getattr(args, "ee", False))
 
 
 def _initialize_ee_targets(state: TeleopState, args: argparse.Namespace) -> None:
@@ -258,11 +289,12 @@ def _move_selected_ee(
     context: SkillContext,
     args: argparse.Namespace,
     state: TeleopState,
+    target_key: str,
     axis: int,
     delta: float,
 ) -> None:
     target = state.selected_ee_target()
-    target["position"][axis] += delta
+    target[target_key][axis] += delta
     result = _dispatch(
         registry,
         context,
@@ -275,12 +307,14 @@ def _move_selected_ee(
         },
     )
     if not result.get("ok"):
-        target["position"][axis] -= delta
+        target[target_key][axis] -= delta
         print(f"\nmove_arm_ee failed: {result.get('error')}")
         return
     x, y, z = target["position"]
+    roll, pitch, yaw = target["rpy"]
     print(
-        f"\r{state.side} ee x={x:+.3f} y={y:+.3f} z={z:+.3f}                  ",
+        f"\r{state.side} ee x={x:+.3f} y={y:+.3f} z={z:+.3f} "
+        f"r={roll:+.3f} p={pitch:+.3f} y={yaw:+.3f}                  ",
         end="",
         flush=True,
     )
@@ -357,13 +391,47 @@ def _dispatch(
     return result
 
 
-def _print_status(state: TeleopState) -> None:
+def _print_status(state: TeleopState, *, ee_mode: bool) -> None:
+    if ee_mode:
+        target = state.selected_ee_target()
+        x, y, z = target["position"]
+        roll, pitch, yaw = target["rpy"]
+        print(
+            f"\rarm={state.side} ee x={x:+.3f} y={y:+.3f} z={z:+.3f} "
+            f"r={roll:+.3f} p={pitch:+.3f} y={yaw:+.3f}                  ",
+            end="",
+            flush=True,
+        )
+        return
     value = state.selected_positions()[state.joint]
     print(
         f"\rarm={state.side} joint={state.joint} value={value:+.3f}                  ",
         end="",
         flush=True,
     )
+
+
+def _print_live_status(state: TeleopState, *, ee_mode: bool) -> None:
+    if ee_mode:
+        _print_live_ee_status(state)
+        return
+    _print_live_joint_status(state)
+
+
+def _print_live_ee_status(state: TeleopState) -> None:
+    assert state.ee_targets is not None
+    parts = []
+    for side in ("right", "left"):
+        target = state.ee_targets[side]
+        x, y, z = target["position"]
+        roll, pitch, yaw = target["rpy"]
+        marker = "*" if side == state.side else " "
+        parts.append(
+            f"{marker}{side}: x={x:+.3f} y={y:+.3f} z={z:+.3f} "
+            f"r={roll:+.3f} p={pitch:+.3f} y={yaw:+.3f}"
+        )
+    line = " | ".join(parts + [f"selected={state.side}.ee"])
+    print(f"\r\033[2K{line}", end="", flush=True)
 
 
 def _print_live_joint_status(state: TeleopState) -> None:

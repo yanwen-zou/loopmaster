@@ -138,11 +138,12 @@ def _decode_rgbd_parts(cv2, np, parts):
 
 
 def _save_rgbd_capture(context, args: dict[str, Any], cv2, metadata: dict[str, Any], color_bgr, depth_u16):
-    output_dir = Path(args.get("output_dir") or _default_output_dir(context)).expanduser()
+    workspace_root = _workspace_root(context)
+    output_dir = _resolve_workspace_path(args.get("output_dir") or "captures", workspace_root=workspace_root)
     frame_id = int(metadata.get("frame_id", 0))
-    rgb_path = Path(args.get("rgb_path") or output_dir / f"d435_frame_{frame_id:06d}_rgb.png").expanduser()
-    depth_path = Path(args.get("depth_path") or output_dir / f"d435_frame_{frame_id:06d}_depth.png").expanduser()
-    metadata_path = Path(args.get("metadata_path") or output_dir / f"d435_frame_{frame_id:06d}.json").expanduser()
+    rgb_path = _resolve_workspace_path(args.get("rgb_path") or output_dir / f"d435_frame_{frame_id:06d}_rgb.png", workspace_root=workspace_root)
+    depth_path = _resolve_workspace_path(args.get("depth_path") or output_dir / f"d435_frame_{frame_id:06d}_depth.png", workspace_root=workspace_root)
+    metadata_path = _resolve_workspace_path(args.get("metadata_path") or output_dir / f"d435_frame_{frame_id:06d}.json", workspace_root=workspace_root)
 
     for path in (rgb_path, depth_path, metadata_path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -156,12 +157,21 @@ def _save_rgbd_capture(context, args: dict[str, Any], cv2, metadata: dict[str, A
     return {"rgb_path": rgb_path, "depth_path": depth_path, "metadata_path": metadata_path}
 
 
-def _default_output_dir(context) -> Path:
+def _workspace_root(context) -> Path | None:
     workspace = getattr(context, "workspace", None)
     root = getattr(workspace, "root", None)
     if root is not None:
-        return Path(root) / "captures"
-    return Path("captures")
+        return Path(root).expanduser().resolve()
+    return None
+
+
+def _resolve_workspace_path(value: Any, *, workspace_root: Path | None) -> Path:
+    path = Path(value).expanduser()
+    if path.is_absolute():
+        return path.resolve()
+    if workspace_root is not None:
+        return (workspace_root / path).resolve()
+    return path.resolve()
 
 
 def _capture_from_observation(context, args: dict[str, Any], camera: str) -> dict[str, Any]:

@@ -2,9 +2,7 @@
 from __future__ import annotations
 
 import argparse
-import contextlib
 import json
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -31,8 +29,7 @@ DEFAULT_INTRINSICS = (
     / "cameras"
     / "d435_intrinsics_640x480.json"
 )
-DEFAULT_DETECT_DOWN_DEVICE = "enx00e04c360914"
-HARDCODE_CAMERA_POSITION = (-0.4, -0.35, 0.23)
+HARDCODE_CAMERA_POSITION = (-0.1, -0.25, 0.13)
 
 
 def main() -> int:
@@ -52,7 +49,7 @@ def main() -> int:
     parser.add_argument("--wifi-only-detect", action="store_true", help="Temporarily disconnect active non-Wi-Fi devices while running AnyGrasp.")
     parser.add_argument("--detect-disable-device", action="append", default=[], help="Temporarily disconnect this NetworkManager device while running AnyGrasp.")
     parser.add_argument("--detect-down-device", action="append", default=None, help="Temporarily set this network link DOWN with sudo while running AnyGrasp.")
-    parser.add_argument("--no-default-detect-down-device", action="store_true", help=f"Do not automatically down {DEFAULT_DETECT_DOWN_DEVICE} before AnyGrasp.")
+    parser.add_argument("--no-default-detect-down-device", action="store_true", help="Do not automatically down the default AnyGrasp license-check network device.")
     parser.add_argument("--sdk-root", type=Path, default=REPO_ROOT / "third_party" / "anygrasp_sdk")
     parser.add_argument("--checkpoint-path", type=Path, default=None)
     parser.add_argument("--license-dir", type=Path, default=None)
@@ -115,7 +112,6 @@ def main() -> int:
     args = parser.parse_args()
     if not args.hardcode_mode and not _has_text(args.grounded_sam_prompt):
         parser.error("--grounded-sam-prompt/--text-prompt is required in AnyGrasp mode")
-    args.detect_down_device = _resolve_detect_down_devices(args)
 
     workspace = new_workspace("capture_anygrasp_grasp_pose", root=args.run_root)
     registry = SkillRegistry(include_user=False)
@@ -169,6 +165,7 @@ def main() -> int:
             "fy": camera_params["fy"],
             "cx": camera_params["cx"],
             "cy": camera_params["cy"],
+            "license_interactive_sudo": True,
         }
         if args.checkpoint_path is not None:
             grasp_args["checkpoint_path"] = str(args.checkpoint_path)
@@ -176,11 +173,18 @@ def main() -> int:
             grasp_args["license_dir"] = str(args.license_dir)
         if args.region_mask_path is not None:
             grasp_args["region_mask_path"] = str(args.region_mask_path)
+        if args.detect_down_device is not None:
+            grasp_args["detect_down_device"] = list(args.detect_down_device)
+        if args.detect_disable_device:
+            grasp_args["detect_disable_device"] = list(args.detect_disable_device)
+        if args.wifi_only_detect:
+            grasp_args["wifi_only_detect"] = True
+        if args.no_default_detect_down_device:
+            grasp_args["no_default_detect_down_device"] = True
         grasp_args["seg_mask_path"] = grounded_sam2_result["seg_mask_path"]
         grasp_args["region_object_id"] = grounded_sam2_result["anygrasp_hint"]["region_object_id"]
 
-        with _detect_network_context(args):
-            detected = _dispatch_or_raise(registry, context, "detect_grasps", grasp_args)
+        detected = _dispatch_or_raise(registry, context, "detect_grasps", grasp_args)
         if not detected.get("grasps"):
             raise RuntimeError(f"AnyGrasp returned no grasps; full result written under {workspace.root}")
 
@@ -540,143 +544,6 @@ def _capture_from_existing_paths(args: argparse.Namespace) -> dict[str, Any]:
             "depth_scale_m": float(metadata.get("depth_scale_m", 0.001)),
         },
     }
-
-
-def _resolve_detect_down_devices(args: argparse.Namespace) -> list[str]:
-    requested = list(args.detect_down_device or [])
-    if args.no_default_detect_down_device:
-        return requested
-    if DEFAULT_DETECT_DOWN_DEVICE not in requested and _network_device_exists(DEFAULT_DETECT_DOWN_DEVICE):
-        requested.insert(0, DEFAULT_DETECT_DOWN_DEVICE)
-    return requested
-
-
-def _network_device_exists(device: str) -> bool:
-    return _run(["ip", "link", "show", device], check=False).returncode == 0
-
-
-@contextlib.contextmanager
-def _detect_network_context(args: argparse.Namespace):
-    down_devices = list(dict.fromkeys(device for device in (args.detect_down_device or []) if device))
-    devices = list(args.detect_disable_device or [])
-    if args.wifi_only_detect:
-        devices.extend(_active_non_wifi_devices())
-    devices = list(dict.fromkeys(device for device in devices if device))
-    active = [_active_connection_for_device(device) for device in devices]
-    down_active = [_active_connection_for_device(device) for device in down_devices]
-    try:
-        for device in devices:
-            print(f"Temporarily disconnecting {device} for AnyGrasp feature-id check...")
-            _run(["nmcli", "dev", "disconnect", device], check=False)
-        for device in down_devices:
-            print(f"Temporarily setting {device} DOWN for AnyGrasp feature-id check...")
-            _run_interactive(["sudo", "ip", "link", "set", "dev", device, "down"], check=True)
-        if devices or down_devices:
-            time.sleep(2.0)
-        yield
-    finally:
-        for device, item in zip(down_devices, down_active, strict=False):
-            _restore_network_device(device, item)
-        for item in active:
-            if not item:
-                continue
-            _restore_network_device(item["device"], item)
-        if active or down_active:
-            time.sleep(2.0)
-
-
-def _restore_network_device(device: str, connection: dict[str, str] | None) -> None:
-    print(f"Restoring network device {device}...")
-    _run_and_report(["sudo", "ip", "link", "set", "dev", device, "up"], interactive=True)
-    _run_and_report(["nmcli", "dev", "connect", device])
-    if connection:
-        for attempt in range(1, 4):
-            print(f"Restoring {device} via {connection['name']} attempt {attempt}/3...")
-            _run_and_report(["nmcli", "con", "up", "uuid", connection["uuid"]])
-            if _wait_for_device_state(device, "connected", timeout_s=8.0):
-                return
-    if not _wait_for_link_up(device, timeout_s=5.0):
-        print(f"WARNING: {device} did not return to link UP; run `nmcli con up uuid {connection['uuid']}` manually" if connection else f"WARNING: {device} did not return to link UP")
-
-
-def _wait_for_device_state(device: str, desired: str, *, timeout_s: float) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        state = _nmcli_device_state(device)
-        if state == desired:
-            return True
-        time.sleep(0.5)
-    print(f"WARNING: {device} state is {_nmcli_device_state(device)!r}, expected {desired!r}")
-    return False
-
-
-def _wait_for_link_up(device: str, *, timeout_s: float) -> bool:
-    deadline = time.time() + timeout_s
-    while time.time() < deadline:
-        out = _run_text(["ip", "-brief", "link", "show", device], check=False)
-        if " UP " in f" {out} " or "<" in out and ",UP," in out:
-            return True
-        time.sleep(0.5)
-    return False
-
-
-def _nmcli_device_state(device: str) -> str:
-    out = _run_text(["nmcli", "-t", "-f", "DEVICE,STATE", "dev", "status"], check=False)
-    for line in out.splitlines():
-        parts = line.split(":", 1)
-        if len(parts) == 2 and parts[0] == device:
-            return parts[1]
-    return ""
-
-
-def _active_non_wifi_devices() -> list[str]:
-    out = _run_text(["nmcli", "-t", "-f", "DEVICE,TYPE,STATE", "dev", "status"], check=False)
-    devices = []
-    for line in out.splitlines():
-        parts = line.split(":")
-        if len(parts) < 3:
-            continue
-        device, device_type, state = parts[:3]
-        if state == "connected" and device_type not in {"wifi", "loopback"}:
-            devices.append(device)
-    return devices
-
-
-def _active_connection_for_device(device: str) -> dict[str, str] | None:
-    out = _run_text(["nmcli", "-t", "-f", "NAME,UUID,TYPE,DEVICE", "con", "show", "--active"], check=False)
-    for line in out.splitlines():
-        name, uuid, conn_type, conn_device = (line.split(":", 3) + ["", "", "", ""])[:4]
-        if conn_device == device:
-            return {"name": name, "uuid": uuid, "type": conn_type, "device": conn_device}
-    return None
-
-
-def _run_text(cmd: list[str], *, check: bool = True) -> str:
-    return _run(cmd, check=check).stdout
-
-
-def _run(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, text=True, capture_output=True, check=check)
-
-
-def _run_interactive(cmd: list[str], *, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(cmd, text=True, check=check)
-
-
-def _run_and_report(cmd: list[str], *, interactive: bool = False) -> subprocess.CompletedProcess[str]:
-    if interactive:
-        completed = subprocess.run(cmd, text=True, check=False)
-    else:
-        completed = subprocess.run(cmd, text=True, capture_output=True, check=False)
-    if completed.returncode != 0:
-        print(f"WARNING: command failed ({completed.returncode}): {' '.join(cmd)}")
-        stderr = getattr(completed, "stderr", None)
-        stdout = getattr(completed, "stdout", None)
-        if stdout:
-            print(stdout.strip())
-        if stderr:
-            print(stderr.strip())
-    return completed
 
 
 def _format_skill_error(name: str, result: dict[str, Any], workspace_root: Path) -> str:

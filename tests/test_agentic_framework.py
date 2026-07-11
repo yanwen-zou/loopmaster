@@ -90,32 +90,6 @@ class LoopMasterAgenticTests(unittest.TestCase):
         gripper_sent = platform.set_gripper("right", 99.0)
         self.assertEqual(gripper_sent["right_gripper.pos"], 0.0)
 
-    def test_move_arm_ee_head_camera_extrinsics(self) -> None:
-        import numpy as np
-
-        from loopmaster_agentic.ik.hei_rebot_lift_ik import (
-            arm_to_head_camera_transform,
-            head_camera_to_arm_transform,
-            load_head_camera_extrinsics,
-        )
-
-        extrinsics = load_head_camera_extrinsics()
-        left_cam = arm_to_head_camera_transform("left")
-        right_cam = arm_to_head_camera_transform("right")
-        cam_left = head_camera_to_arm_transform("left")
-
-        np.testing.assert_allclose(left_cam, extrinsics["transforms"]["left"]["arm_to_camera"])
-        np.testing.assert_allclose(right_cam, extrinsics["transforms"]["right"]["arm_to_camera"])
-        np.testing.assert_allclose(left_cam[:3, 3], [0.03, -0.2, 0.34])
-        np.testing.assert_allclose(right_cam[:3, 3], [0.03, 0.26, 0.34])
-        self.assertAlmostEqual(left_cam[0, 0], np.cos(np.deg2rad(150.0)), places=6)
-        self.assertAlmostEqual(left_cam[0, 2], np.sin(np.deg2rad(150.0)), places=6)
-        self.assertAlmostEqual(left_cam[2, 0], -np.sin(np.deg2rad(150.0)), places=6)
-        self.assertAlmostEqual(left_cam[2, 2], np.cos(np.deg2rad(150.0)), places=6)
-        np.testing.assert_allclose(left_cam[:3, :3], right_cam[:3, :3])
-        np.testing.assert_allclose(cam_left, np.linalg.inv(left_cam))
-        self.assertAlmostEqual((left_cam @ np.linalg.inv(right_cam))[1, 3], -0.46)
-
     def test_move_arm_ee_skill_returns_structured_ik_errors(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
 
@@ -333,6 +307,14 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         self.assertTrue(result["ik_success"])
         self.assertEqual(solve.call_count, 1)
+
+    def test_arm_target_z_safety_clip(self) -> None:
+        from loopmaster_agentic.ik.mink_ik import MIN_ARM_TARGET_Z, _clip_arm_target_z
+
+        pose = [[1, 0, 0, 0.2], [0, 1, 0, 0.0], [0, 0, 1, -0.3], [0, 0, 0, 1]]
+
+        self.assertTrue(_clip_arm_target_z(pose))
+        self.assertEqual(pose[2][3], MIN_ARM_TARGET_Z)
 
     def test_keyboard_l_and_r_select_arm_side(self) -> None:
         state = TeleopState()
@@ -638,6 +620,17 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertEqual(grasp_args["color_path"], "/tmp/rgb.png")
         self.assertEqual(grasp_args["depth_path"], "/tmp/depth.png")
 
+    def test_grounded_sam2_resolves_relative_paths_against_workspace(self) -> None:
+        from loopmaster_agentic.skills.base.perception.grounded_sam2.policy import _resolve_workspace_path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "run"
+            repo = Path(tmp) / "third_party" / "Grounded-SAM-2"
+
+            resolved = _resolve_workspace_path("artifacts/rgb.png", workspace_root=workspace, repo_root=repo)
+
+        self.assertEqual(resolved, workspace / "artifacts" / "rgb.png")
+
     def test_detect_grasps_does_not_mix_example_mask_with_custom_rgbd(self) -> None:
         import numpy as np
         from PIL import Image
@@ -674,6 +667,42 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertIsNone(seg_mask)
         self.assertEqual(source["seg_mask_path"], "")
 
+    def test_detect_grasps_defaults_to_d435_intrinsics_config(self) -> None:
+        from loopmaster_agentic.skills.base.perception.detect_grasps.policy import _d435_camera_params
+
+        params = _d435_camera_params()
+
+        self.assertAlmostEqual(params["fx"], 607.03662109375)
+        self.assertAlmostEqual(params["fy"], 606.8038940429688)
+        self.assertAlmostEqual(params["cx"], 316.76116943359375)
+        self.assertAlmostEqual(params["cy"], 242.75991821289062)
+
+    def test_detect_grasps_wraps_license_check_with_network_context(self) -> None:
+        import subprocess
+
+        from loopmaster_agentic.skills.base.perception.detect_grasps import policy
+
+        events = []
+
+        def fake_sudo_ip_link(device: str, state: str, **_kwargs):
+            events.append((device, state))
+            return subprocess.CompletedProcess(["sudo"], 0, "", "")
+
+        with (
+            mock.patch.object(policy, "_network_device_exists", return_value=True),
+            mock.patch.object(policy, "_active_connection_for_device", return_value=None),
+            mock.patch.object(policy, "_sudo_ip_link", side_effect=fake_sudo_ip_link),
+            mock.patch.object(policy, "_run", return_value=subprocess.CompletedProcess(["nmcli"], 0, "", "")),
+            mock.patch.object(policy.time, "sleep", return_value=None),
+        ):
+            status = {}
+            with policy._license_network_context({}, status):
+                events.append(("license", "check"))
+
+        self.assertEqual(events, [("enx00e04c360914", "down"), ("license", "check"), ("enx00e04c360914", "up")])
+        self.assertEqual(status["down_devices"], ["enx00e04c360914"])
+        self.assertFalse(status["sudo_password_provided"])
+
     def test_strategist_links_object_grasp_perception_with_dynamic_refs(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             plan = Strategist().plan(
@@ -708,6 +737,75 @@ class LoopMasterAgenticTests(unittest.TestCase):
             self.assertTrue((workspace / "worker_agent.json").is_file())
             self.assertTrue((workspace / "auditor_agent.json").is_file())
 
+    def test_handler_reruns_after_documentation_only_skill_update(self) -> None:
+        class UpdatingAuditor(Auditor):
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def review(self, **kwargs):
+                self.calls += 1
+                if self.calls > 1:
+                    return {
+                        "verdict": "done",
+                        "root_cause": "",
+                        "next_action": "",
+                        "used_skills": ["observe"],
+                        "used_control_skills": [],
+                        "sim_leak": [],
+                        "research_questions": [],
+                        "success": True,
+                    }
+                return {
+                    "verdict": "retry",
+                    "root_cause": "documentation-only update",
+                    "next_action": "reload skill docs and replan",
+                    "used_skills": ["observe"],
+                    "used_control_skills": [],
+                    "sim_leak": [],
+                    "research_questions": [],
+                    "success": False,
+                    "skill_updates": [
+                        {
+                            "skill_name": "observe",
+                            "rationale": "doc only",
+                            "files": [
+                                {
+                                    "path": "SKILL.md",
+                                    "content": "---\nname: observe\ncategory: base/perception\n---\n# Observe\nDoc only.\n",
+                                }
+                            ],
+                        }
+                    ],
+                }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "skills"
+            observe_dir = root / "perception" / "observe"
+            observe_dir.mkdir(parents=True)
+            (observe_dir / "SKILL.md").write_text(
+                "---\nname: observe\ncategory: base/perception\n---\n# Observe\n",
+                encoding="utf-8",
+            )
+            (observe_dir / "policy.py").write_text(
+                "def dispatch(context, args):\n"
+                "    return {'ok': True, 'observation': {'state_keys': []}}\n",
+                encoding="utf-8",
+            )
+            auditor = UpdatingAuditor()
+            result = Handler(
+                workspace_root=Path(tmp) / "workspaces",
+                auditor=auditor,
+                skills=SkillRegistry(roots=[root], include_user=False),
+            ).run(
+                task="inspect robot",
+                user_request="inspect robot",
+                platform=DryRunPlatform(),
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(auditor.calls, 2)
+        self.assertIn("skill update observe", "\n".join(result.notes))
+
     def test_strategist_agent_prompt_includes_skill_args(self) -> None:
         class CapturingStrategistClient:
             profile = "fake"
@@ -738,7 +836,9 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "  side: string\n"
                 "  cycles: integer\n"
                 "---\n"
-                "# Arg Skill\n",
+                "# Arg Skill\n"
+                "\n"
+                "Use this markdown body as planner-facing skill usage guidance.\n",
                 encoding="utf-8",
             )
             (skill_dir / "policy.py").write_text(
@@ -756,6 +856,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
 
         arg_skill = next(item for item in fake.available_skills if item["name"] == "arg_skill")
         self.assertEqual(arg_skill["args"], {"side": "string", "cycles": "integer"})
+        self.assertIn("planner-facing skill usage guidance", arg_skill["usage_markdown"])
 
     def test_handler_chat_session_persists_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

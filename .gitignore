@@ -9,4 +9,7 @@ loopmaster-linux.tar.gz
 
 *.png
 _vis_runs/
+_viz_runs/
 _grasp_runs/
+_runs/
+artifacts/
