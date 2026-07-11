@@ -20,8 +20,9 @@
     width:66px;height:66px;margin:0 auto 12px;border-radius:50%;
     display:flex;align-items:center;justify-content:center;font-size:30px;
     background:linear-gradient(135deg,var(--a1),var(--a2));color:#fff;
-    box-shadow:0 8px 20px rgba(31,82,230,.22);
+    box-shadow:0 8px 20px rgba(31,82,230,.22);overflow:hidden;
   }
+  .dev-avatar img{width:100%;height:100%;object-fit:cover;display:block}
   .dev-role{font-size:12px;font-weight:700;color:var(--blue);letter-spacing:.5px;margin-bottom:4px}
   .dev-name{font-size:16px;font-weight:800;color:var(--text)}
   .dev-tag{
@@ -73,25 +74,25 @@
   <h3 class="about-h">👥 开发团队</h3>
   <div class="dev-grid">
     <div class="dev-card">
-      <div class="dev-avatar" style="--a1:#4f86ff;--a2:#1f52e6">🦾</div>
+      <div class="dev-avatar" style="--a1:#4f86ff;--a2:#1f52e6"><img src="{{ url_for('static', filename='avatar/pengdong.jpg') }}" alt="黑狗木"></div>
       <div class="dev-role">本体设计</div>
       <div class="dev-name">黑狗木</div>
       <div class="dev-tag">B站 UP主</div>
     </div>
     <div class="dev-card">
-      <div class="dev-avatar" style="--a1:#a855f7;--a2:#7c3aed">🧠</div>
+      <div class="dev-avatar" style="--a1:#a855f7;--a2:#7c3aed"><img src="{{ url_for('static', filename='avatar/yanwen.jpg') }}" alt="交大博士生"></div>
       <div class="dev-role">算法设计</div>
       <div class="dev-name">交大博士生</div>
       <div class="dev-tag">上海交大</div>
     </div>
     <div class="dev-card">
-      <div class="dev-avatar" style="--a1:#22d3ee;--a2:#0891b2">🎨</div>
+      <div class="dev-avatar" style="--a1:#22d3ee;--a2:#0891b2"><img src="{{ url_for('static', filename='avatar/jun.png') }}" alt="盒子桥"></div>
       <div class="dev-role">交互设计</div>
       <div class="dev-name">盒子桥</div>
       <div class="dev-tag">B站 UP主</div>
     </div>
     <div class="dev-card">
-      <div class="dev-avatar" style="--a1:#ffb020;--a2:#f59e0b">💡</div>
+      <div class="dev-avatar" style="--a1:#ffb020;--a2:#f59e0b"><img src="{{ url_for('static', filename='avatar/xinhao.jpg') }}" alt="问界设计师"></div>
       <div class="dev-role">产品设计</div>
       <div class="dev-name">问界设计师</div>
       <div class="dev-tag">问界 AITO</div>
