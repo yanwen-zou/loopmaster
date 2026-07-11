@@ -149,7 +149,7 @@ def init_db():
         """
     )
     # 初始化统计计数器
-    for k in ("page_visits", "arm_exec", "arm_success", "arm_fail"):
+    for k in ("page_visits", "arm_exec", "arm_success", "arm_fail", "pickup_flag"):
         db.execute("INSERT OR IGNORE INTO stats(key, value) VALUES(?, 0)", (k,))
 
     # 初始商品（上海人民币售价，单位元 = 月亮币）
