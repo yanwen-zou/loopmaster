@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>麦西 Messi · 自助售卖</title>
 <link rel="icon" type="image/png" href="/static/logo.png">
-<link rel="stylesheet" href="/static/style.css?v=20260711d">
+<link rel="stylesheet" href="/static/style.css?v=20260711f">
 </head>
 <body>
 <div class="topbar">
@@ -124,6 +124,7 @@
 
     <div class="foot-bar">
       <span class="team">队伍 · <b>LoopMaster</b></span>
+      <span class="hack">🚀 探月计划黑客松 · 48h 产品</span>
       <div class="foot-links">
         <a href="/about" class="about-a">关于我们 →</a>
         <div class="repo-row">
@@ -178,7 +179,8 @@ async function doLogin(uid, silent){
   document.getElementById('shopView').classList.remove('hidden');
   document.getElementById('walletBox').style.display = 'flex';
   document.getElementById('navLinks').style.display = 'flex';
-  document.getElementById('siteFooter').style.display = 'none';   // 选购页不显示项目简介页脚
+  document.getElementById('siteFooter').style.display = 'none';   // 选购页不显示项目简介大页脚
+  document.getElementById('miniFooter').style.display = 'flex';   // 改用底部精致小页脚
   document.getElementById('uidLabel').textContent = d.user_id;
   updateWallet();
   if(!silent){
@@ -295,6 +297,16 @@ async function confirmItem(){
 
   if(!d.ok){ showState('confirm'); toast(d.msg||'下单失败', 'err'); return; }
 
+  // 真机模式：下单只建任务，不弹「确定取走」——原地等待 agent 上报完成后再显示结果并结算
+  if(d.status === 'pending'){
+    document.getElementById('mGrabName').textContent =
+      `机械臂正在为你取货 ${p.emoji}${p.name} ×${MODAL_QTY}，等待完成…`;
+    showState('grab');
+    pollOrder(d.order_id);
+    loadProducts();
+    return;
+  }
+
   USER.coins = d.coins;
   updateWallet();
   const a = d.arm;
@@ -311,8 +323,39 @@ async function confirmItem(){
   loadProducts();   // 后台刷新库存
 }
 
+// ===== 等待 agent 完成（真机模式：下单后原地轮询，直到机器人/agent 上报完成再结算显示） =====
+let WAIT_ORDER = null, WAIT_TIMER = null, IN_PICKUP = false;
+function stopWait(){ if(WAIT_TIMER){ clearInterval(WAIT_TIMER); WAIT_TIMER=null; } }
+
+function pollOrder(oid){
+  stopWait();
+  WAIT_ORDER = oid;
+  IN_PICKUP = true;   // 等待期间禁止关闭弹窗
+  WAIT_TIMER = setInterval(async ()=>{
+    let d;
+    try{ d = await (await fetch('/api/order/status?order_id=' + oid)).json(); }
+    catch(e){ return; }               // 网络抖动：下次轮询再试
+    if(!d.ok || !d.settled) return;   // 仍在等待 agent 完成
+    stopWait(); IN_PICKUP = false;
+    if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
+    const a = d.arm || {};
+    const rIcon = document.getElementById('rIcon');
+    const rTitle = document.getElementById('rTitle');
+    if(d.order_status==='success'){ rIcon.textContent='✅'; rTitle.textContent='取货完成'; }
+    else if(d.order_status==='partial'){ rIcon.textContent='⚠️'; rTitle.textContent='部分完成'; }
+    else { rIcon.textContent='❌'; rTitle.textContent='取货失败'; }
+    document.getElementById('rDetail').innerHTML =
+      (a.exec ? `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` : '') +
+      (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
+                : '本次未扣款') +
+      '<br>感谢惠顾，机器人已完成 🦾';
+    showState('result');
+    loadProducts();
+  }, 2000);
+}
+
 function closeItem(){
-  if(BUSY) return;
+  if(BUSY || IN_PICKUP) return;   // 等待 agent 完成期间不允许关闭弹窗
   MODAL_ID = null;
   document.getElementById('modalMask').classList.add('hidden');
   showState('confirm');
@@ -323,11 +366,14 @@ document.getElementById('uidInput').addEventListener('keydown', e=>{ if(e.key===
 // 返回首页 = 回到「输入名字」页：清空登录态、隐藏选购页
 function resetToLogin(){
   USER = null;
+  stopWait(); IN_PICKUP = false;                                   // 清掉等待轮询
+  const mm = document.getElementById('modalMask'); if(mm) mm.classList.add('hidden');
   document.getElementById('loginView').classList.remove('hidden');
   document.getElementById('shopView').classList.add('hidden');
   document.getElementById('walletBox').style.display = 'none';
   document.getElementById('navLinks').style.display = 'none';
-  document.getElementById('siteFooter').style.display = '';       // 回到输入名字页恢复页脚
+  document.getElementById('siteFooter').style.display = '';       // 回到输入名字页恢复大页脚
+  document.getElementById('miniFooter').style.display = 'none';
   const inp = document.getElementById('uidInput'); if(inp) inp.value = '';
 }
 // 登录状态监测：本设备记住过用户名就自动登录，刷新/返回都不用重输
@@ -336,5 +382,13 @@ function resetToLogin(){
   if(saved) doLogin(saved, true);
 })();
 </script>
+
+<!-- 选购页底部统一精致页脚（登录页用大页脚，故默认隐藏） -->
+<footer class="mini-footer" id="miniFooter" style="display:none">
+  <span class="team">队伍 · <b>LoopMaster</b></span>
+  <span class="hack">🚀 探月计划黑客松 · 48h 产品</span>
+  <a class="repo" href="https://github.com/lipengdong/hei-rebot-lift" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.94 10.94 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>本体 Hei-Rebot-Lift</a>
+  <a class="repo" href="https://github.com/yanwen-zou/loopmaster" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.28-.01-1.02-.02-2-3.2.7-3.88-1.54-3.88-1.54-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.72-1.55-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.29 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 2.9-.39c.98 0 1.97.13 2.9.39 2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.8 1.19 1.83 1.19 3.09 0 4.42-2.69 5.39-5.25 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .31.21.68.8.56A10.94 10.94 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z"/></svg>算法 LoopMaster</a>
+</footer>
 </body>
 </html>

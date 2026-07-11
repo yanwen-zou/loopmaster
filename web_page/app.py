@@ -758,6 +758,7 @@ def api_task_report(tid):
     db.execute("UPDATE tasks SET status=?, result=?, finished_at=? WHERE id=?",
                (task_status, json.dumps(data.get("result") or data, ensure_ascii=False),
                 now_str(), tid))
+    set_stat(db, "pickup_flag", 0)   # agent 上报完成 = 交付结束，机器人收回
     # 落一条执行日志
     db.execute(
         """INSERT INTO exec_logs(task_id, order_id, agent_id, ts, instruction, status, code, detail)
@@ -888,6 +889,30 @@ def api_pickup():
     return jsonify(ok=True, flag=1, order_id=task["order_id"], task_id=task["id"],
                    remaining=remaining, amount=round(amount, 2),
                    instruction=task["instruction"])
+
+
+@app.route("/api/order/status")
+def api_order_status():
+    """前端下单后轮询：等待 agent 上报完成。返回订单是否已结算(settled)+ 最终金额/余额。
+    settled=False 表示仍在等待机器人/agent 执行；无需令牌。"""
+    oid = request.args.get("order_id")
+    if not oid:
+        return jsonify(ok=False, msg="缺少 order_id"), 400
+    db = get_db()
+    order = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+    if not order:
+        return jsonify(ok=False, msg="订单不存在"), 404
+    task = db.execute("SELECT status FROM tasks WHERE order_id=? ORDER BY id DESC LIMIT 1",
+                      (oid,)).fetchone()
+    u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
+    return jsonify(
+        ok=True, order_id=int(oid), order_status=order["status"],
+        task_status=(task["status"] if task else None),
+        settled=(order["status"] != "pending"),
+        paid=order["total"],
+        arm={"exec": order["arm_exec"], "success": order["arm_success"], "fail": order["arm_fail"]},
+        coins=(u["coins"] if u else None),
+    )
 
 
 # ============================================================================
