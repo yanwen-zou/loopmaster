@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>LoopViz · LoopMaster 四角色可视化</title>
 <link rel="icon" type="image/png" href="/static/logo.png">
-<link rel="stylesheet" href="/static/loopviz.css?v=20260711d">
+<link rel="stylesheet" href="/static/loopviz.css?v=20260711e">
 </head>
 <body>
 <div class="top">
@@ -116,11 +116,13 @@ async function refreshRuns(){
   let rs; try{ rs=await (await fetch('/api/loopviz/runs')).json(); }catch(e){ return; }
   const sel=document.getElementById('runSel');
   const runs=(rs&&rs.runs)||[];
-  if(!runs.length){                    // 空闲：无实时运行 → 页面留白
-    IDLE=true; RUN=null; CUR=null;
-    sel.innerHTML='<option>空闲中（无运行）</option>';
-    const vb=document.getElementById('verdict'); vb.textContent='—'; vb.className='verdict-badge v-unknown';
-    renderPipeline(); renderTabs(); render();
+  if(!runs.length){                    // 空闲：无实时运行 → 播放开发日志
+    if(!IDLE){                         // 仅在「刚进入空闲」时渲染一次，避免每次轮询打断日志播放
+      IDLE=true; RUN=null; CUR=null;
+      sel.innerHTML='<option>空闲中 · 播放开发日志</option>';
+      const vb=document.getElementById('verdict'); vb.textContent='idle'; vb.className='verdict-badge v-unknown';
+      renderPipeline(); renderTabs(); render();
+    }
     return;
   }
   IDLE=false;
@@ -170,7 +172,8 @@ function renderTabs(){
 function go(k){ TAB=k; renderPipeline(); renderTabs(); render(); window.scrollTo(0,0); }
 function render(){
   const v=document.getElementById('view');
-  if(IDLE){ stopLoopReplay(); v.innerHTML='<div class="panel"><div class="empty">空闲中 · 运行 <code>test/push_demo.py</code> 后这里会实时显示机器人运行</div></div>'; return; }
+  if(IDLE){ stopLoopReplay(); v.innerHTML=devlogCard(); startDevlog(); return; }
+  stopDevlog();
   v.innerHTML = TAB==='overview' ? viewOverview() : viewAgent(TAB);
   if(TAB==='overview' && RUN && RUN.loop_events && RUN.loop_events.length){
     startLoopReplay(RUN.loop_events);   // 概述里动态回放四角色循环
@@ -284,6 +287,62 @@ function loopEventHtml(e){
     body=`${esc(e.title||e.type||'')}`;
   }
   return `<div class="${cls}" style="--rc:var(--${role.split('.')[0]})">${head}<div class="le-body">${body}</div></div>`;
+}
+
+/* ------------ 空闲时：自动滚动播放开发日志（麦西 Messi 诞生记） ------------ */
+let DEV_TIMER=null, DEV_I=0;
+const DEV_STEP_MS=1500;
+const DEV_LOG=[
+  {i:'🔧',t:'15:40',c:'handler',x:'解决网络问题'},
+  {i:'📡',t:'16:00',c:'handler',x:'无线网络连接卡顿，有线也 ping 不到机器人'},
+  {i:'✅',t:'16:30',c:'auditor',x:'完成 keyboard control 底盘移动'},
+  {i:'📦',t:'17:00',c:'handler',x:'外卖买了网口拓展坞，解决了连接问题'},
+  {i:'🧩',t:'18:00',c:'strategist',x:'搭建完成 agent 持久对话窗口，准备 base skills'},
+  {i:'😅',t:'18:00',c:'fail',x:'零食筐打印机被抢了，人类骂了脏话'},
+  {i:'🦾',t:'18:30',c:'worker',x:'测试 agent：让左手 joint5 来回摇摆 5 次，随后 keep running'},
+  {i:'🐛',t:'19:00',c:'handler',x:'debug agent'},
+  {phase:'正式 Loop 开始'},
+  {i:'🔁',t:'23:05',c:'worker',x:'agent loop 自迭代让左手 joint5 摇摆 5 次，reviewer 报错打回 9 次'},
+  {i:'💡',t:'23:15',c:'strategist',x:'人类醒悟：create skill 本身应该是一个 skill'},
+  {i:'🎉',t:'23:39',c:'auditor',x:'机器人动了，而且没写一行 code！'},
+  {i:'🎵',t:'01:30',c:'strategist',x:'《麦西之歌》诞生'},
+  {i:'🤖',t:'02:50',c:'auditor',x:'跑通 grasp 抓取链路'},
+  {i:'🛡️',t:'08:23',c:'fail',x:'agent 撞桌子了，人类添加安全边界 z > -0.15'},
+  {i:'📸',t:'08:50',c:'worker',x:'agent 自己拍了一张照片'},
+  {i:'🧠',t:'09:03',c:'strategist',x:'agent 不愿用 grounded-sam 理解面前有什么——是人类没给它多模态接口'},
+  {i:'🗺️',t:'11:11',c:'auditor',x:'我们给 agent 建好了图，它自己写了 navigation skill'},
+  {i:'⏰',t:'12:04',c:'strategist',x:'必须显式让 agent 意识到「时间」的概念'},
+  {i:'⏱️',t:'12:11',c:'worker',x:'agent 获得了 meta/timer skill'},
+  {i:'⚡',t:'13:45',c:'auditor',x:'agent 学会 shortcut：直接调用 cache 轨迹抓取'},
+];
+function devlogCard(){
+  return `<div class="panel loop-card">
+    <h3><span class="bar"></span>🛠️ 开发日志回放 · 麦西 Messi 诞生记（7 月 10 日）
+      <span class="lr-iter" id="devIter">idle · 等待机器人运行</span></h3>
+    <div class="lr-stream" id="devStream"></div>
+  </div>`;
+}
+function devEntryHtml(e){
+  if(e.phase) return `<div class="dev-phase">— 🚀 ${esc(e.phase)} —</div>`;
+  return `<div class="le ok" style="--rc:var(--${e.c})">
+    <span class="le-role" style="--rc:var(--${e.c})">${e.i} <b class="mono">07-10 ${esc(e.t)}</b></span>
+    <div class="le-body">${esc(e.x)}</div></div>`;
+}
+function stopDevlog(){ if(DEV_TIMER){clearInterval(DEV_TIMER);DEV_TIMER=null;} }
+function startDevlog(){
+  stopDevlog(); DEV_I=0;
+  const s=document.getElementById('devStream'); if(!s) return;
+  s.innerHTML='';
+  DEV_TIMER=setInterval(devTick, DEV_STEP_MS); devTick();
+}
+function devTick(){
+  const s=document.getElementById('devStream'); if(!s){stopDevlog();return;}
+  if(DEV_I<DEV_LOG.length){
+    s.insertAdjacentHTML('beforeend', devEntryHtml(DEV_LOG[DEV_I])); s.scrollTop=s.scrollHeight; DEV_I++;
+  }else{
+    DEV_I++;
+    if(DEV_I>DEV_LOG.length+4){ s.innerHTML=''; DEV_I=0; }   // 播完停留几秒后循环重播
+  }
 }
 
 /* ------------ 角色详情：左图表 + 右说明 ------------ */

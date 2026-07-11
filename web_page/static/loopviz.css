@@ -250,3 +250,6 @@ pre.raw{background:var(--panel3);border:1px solid var(--line);border-radius:10px
 
 /* 图片 logo：填满品牌方框，裁掉外边白 */
 img.logo{object-fit:cover;background:none;padding:0}
+
+/* 空闲开发日志：阶段分隔 */
+.dev-phase{text-align:center;font-weight:800;font-size:11px;letter-spacing:2px;color:var(--accent);margin:8px 0 2px;text-transform:uppercase}
