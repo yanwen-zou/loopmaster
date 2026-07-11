@@ -20,9 +20,14 @@
   <div class="section-title">➕ 新增货品</div>
   <div class="login-card" style="margin:0;max-width:none">
     <div class="two-col">
-      <div><label>商品名</label><input id="p_name" placeholder="如：怡宝矿泉水"></div>
+      <div><label>商品名（中文）</label><input id="p_name" placeholder="如：怡宝矿泉水"></div>
+      <div><label>English 名（agent 用，小写下划线）</label>
+        <input id="p_name_en" placeholder="如：mineral_water（留空自动生成）"></div>
+    </div>
+    <div class="two-col">
       <div><label>分类</label>
-        <select id="p_cat"><option>饮料</option><option>零食</option></select></div>
+        <select id="p_cat"><option>饮料</option><option>零食</option><option>自定义</option></select></div>
+      <div></div>
     </div>
     <div class="two-col">
       <div><label>售价（元 / 月亮币）</label><input id="p_price" type="number" step="0.5" placeholder="3.0"></div>
@@ -63,7 +68,7 @@ async function load(){
   const d = await (await fetch('/api/products')).json();
   document.getElementById('rows').innerHTML = d.products.map(p=>`
     <tr>
-      <td>${p.id}</td><td>${p.emoji} ${p.name}</td><td>${p.category}</td>
+      <td>${p.id}</td><td>${p.emoji} ${p.name}<br><small class="muted">${p.name_en||''}</small></td><td>${p.category}</td>
       <td style="color:var(--orange)">☾${p.price.toFixed(1)}</td>
       <td class="${p.stock<=5?'':''}" style="${p.stock<=5?'color:var(--red)':''}">${p.stock}</td>
       <td>
@@ -74,7 +79,8 @@ async function load(){
 }
 async function addProduct(){
   const body = {
-    name: p_name.value.trim(), category: p_cat.value,
+    name: p_name.value.trim(), name_en: p_name_en.value.trim().toLowerCase(),
+    category: p_cat.value,
     price: p_price.value, stock: p_stock.value, emoji: p_emoji.value.trim()||'📦'
   };
   if(!body.name){ toast('请填商品名','err'); return; }
@@ -82,7 +88,7 @@ async function addProduct(){
     headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   if(!d.ok){ toast(d.msg||'失败','err'); return; }
   toast('✅ 已新增商品 #'+d.id,'ok');
-  p_name.value=p_price.value=p_stock.value=p_emoji.value='';
+  p_name.value=p_name_en.value=p_price.value=p_stock.value=p_emoji.value='';
   load();
 }
 async function restock(id){

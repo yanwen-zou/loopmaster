@@ -53,6 +53,11 @@
       <div class="m-title">确认选购？确定后机械臂立即抓取</div>
       <div class="m-name" id="mName">商品名</div>
       <div class="m-price">单价 <b>☾<span id="mPrice">0</span></b></div>
+      <div id="mNoteBox" class="hidden" style="margin:10px 0">
+        <input id="mNote" placeholder="想要什么？描述你的需求（如 spicy_chips）"
+               autocomplete="off" style="width:100%;box-sizing:border-box;padding:10px;
+               border:1px solid #ddd;border-radius:8px">
+      </div>
       <div class="m-qty">
         <span>数量</span>
         <div class="qty-ctrl">
@@ -203,18 +208,20 @@ async function loadProducts(){
 function render(){
   const cats = {};
   PRODUCTS.forEach(p => { (cats[p.category] = cats[p.category] || []).push(p); });
+  const CAT_ICON = {'饮料':'🥤','零食':'🍪','自定义':'✨'};
   let html = '';
   for(const cat in cats){
-    html += `<div class="section-title">${cat==='饮料'?'🥤':'🍪'} ${cat}</div><div class="grid">`;
+    html += `<div class="section-title">${CAT_ICON[cat]||'📦'} ${cat}</div><div class="grid">`;
     cats[cat].forEach(p => {
+      const isCustom = p.name_en === 'custom';
       const out = p.stock <= 0;
       html += `
       <div class="card ${out?'out':''}" ${out?'':`onclick="askItem(${p.id})"`}>
         <div class="emoji">${p.emoji}</div>
         <div class="name">${p.name}</div>
         <div class="row">
-          <span class="price">${p.price.toFixed(1)}</span>
-          <span class="stock ${p.stock<=5?'low':''}">剩 ${p.stock}</span>
+          <span class="price">${isCustom ? '按需' : p.price.toFixed(1)}</span>
+          ${isCustom ? '<span class="stock">📝 填写需求</span>' : `<span class="stock ${p.stock<=5?'low':''}">剩 ${p.stock}</span>`}
         </div>
         <div class="row">
           ${out ? '<span class="muted">已售罄</span>' : '<span class="tap">👆 点击选购</span>'}
@@ -241,6 +248,11 @@ function askItem(id){
   document.getElementById('mEmoji').textContent = p.emoji;
   document.getElementById('mName').textContent = p.name;
   document.getElementById('mPrice').textContent = p.price.toFixed(1);
+  // 自定义商品：显示需求输入框
+  const isCustom = p.name_en === 'custom';
+  document.getElementById('mNoteBox').classList.toggle('hidden', !isCustom);
+  const noteEl = document.getElementById('mNote');
+  if(noteEl) noteEl.value = '';
   syncModal();
   showState('confirm');
   document.getElementById('modalMask').classList.remove('hidden');
@@ -262,15 +274,21 @@ async function confirmItem(){
   if(MODAL_QTY > p.stock){ toast('库存不足', 'err'); return; }
   if(USER.coins < p.price*MODAL_QTY){ toast('月亮币不足', 'err'); return; }
 
+  const isCustom = p.name_en === 'custom';
+  const note = isCustom ? document.getElementById('mNote').value.trim() : '';
+  if(isCustom && !note){ toast('请描述你想要的商品', 'err'); return; }
+
   BUSY = true;
   document.getElementById('mGrabName').textContent = `正在抓取 ${p.emoji}${p.name} ×${MODAL_QTY}`;
   showState('grab');
   await sleep(900);   // 让"机械臂抓取中"动画呈现
 
+  const item = {id: MODAL_ID, qty: MODAL_QTY};
+  if(note) item.note = note;
   let d;
   try{
     const r = await fetch('/api/order', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({user_id: USER.user_id, items:[{id: MODAL_ID, qty: MODAL_QTY}]})});
+      body: JSON.stringify({user_id: USER.user_id, items:[item]})});
     d = await r.json();
   }catch(e){ d = {ok:false, msg:'网络错误'}; }
   BUSY = false;

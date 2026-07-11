@@ -49,6 +49,32 @@ app = Flask(__name__)
 # 静态文件（CSS/JS）不长期缓存：改了样式浏览器会重新拉取，避免旧样式卡住布局
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
+# ----------------------------- 商品仓库 -----------------------------
+# 网站对顾客展示中文名(name)，与 agent 机器人交互只用英文小写下划线(name_en / sku)。
+# 中英映射就存在 products.name_en 这一列，下单时据此把发给 agent 的字段全部转成英文。
+# 字段顺序：(中文名, 英文名 name_en, 分类, 售价, 库存, emoji)
+SEED_PRODUCTS = [
+    ("可乐",   "cola",          "饮料",   3.0, 20, "🥤"),
+    ("红牛",   "red_bull",      "饮料",   6.0, 15, "🐂"),
+    ("瓶装水", "bottled_water", "饮料",   2.0, 30, "💧"),
+    ("火腿肠", "ham_sausage",   "零食",   2.0, 25, "🌭"),
+    ("香肠",   "sausage",       "零食",   3.0, 20, "🍖"),
+    ("饼干",   "biscuit",       "零食",   5.0, 18, "🍪"),
+    ("蛋糕",   "cake",          "零食",   8.0, 12, "🍰"),
+    ("自定义", "custom",        "自定义", 0.0, 99, "✨"),
+]
+# 分类中英映射（发给 agent / 存英文用）
+CATEGORY_EN = {"饮料": "drink", "零食": "snack", "自定义": "custom"}
+
+
+def slug_en(name, fallback="item"):
+    """把商品名转成 agent 用的英文小写下划线标识：纯 ASCII 直接 slug，含中文则回退。"""
+    s = (name or "").strip().lower()
+    if s and re.fullmatch(r"[\x00-\x7f]+", s):
+        s = re.sub(r"[^a-z0-9]+", "_", s).strip("_")
+        return s or fallback
+    return fallback
+
 
 def check_token():
     """写接口令牌校验：未配置 API_TOKEN 时放行。"""
@@ -85,6 +111,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
+            name_en TEXT NOT NULL DEFAULT '',   -- agent 用的英文小写下划线标识(sku)
             category TEXT NOT NULL DEFAULT '零食',
             price REAL NOT NULL,
             stock INTEGER NOT NULL DEFAULT 0,
@@ -125,7 +152,7 @@ def init_db():
             order_id INTEGER,
             user_id TEXT,
             instruction TEXT,             -- 人类可读任务指令
-            payload TEXT,                 -- JSON: line_items [{id,name,price,emoji,qty}]
+            payload TEXT,                 -- JSON(纯英文): [{id,sku,name,category,price,qty,note?}] 下发给 agent
             status TEXT NOT NULL DEFAULT 'pending',  -- pending/running/done/failed
             agent_id TEXT,                -- 认领的 agent
             result TEXT,                  -- JSON: agent 反馈原文
@@ -152,27 +179,22 @@ def init_db():
     for k in ("page_visits", "arm_exec", "arm_success", "arm_fail", "pickup_flag"):
         db.execute("INSERT OR IGNORE INTO stats(key, value) VALUES(?, 0)", (k,))
 
-    # 初始商品（上海人民币售价，单位元 = 月亮币）
-    count = db.execute("SELECT COUNT(*) AS c FROM products").fetchone()[0]
-    if count == 0:
-        seed = [
-            ("可口可乐 330ml", "饮料", 3.0, 20, "🥤"),
-            ("百事可乐 330ml", "饮料", 3.0, 20, "🥤"),
-            ("纯牛奶 250ml", "饮料", 5.0, 15, "🥛"),
-            ("鲜橙汁 300ml", "饮料", 6.0, 12, "🧃"),
-            ("现磨美式咖啡", "饮料", 12.0, 10, "☕"),
-            ("农夫山泉 550ml", "饮料", 2.0, 30, "💧"),
-            ("红牛能量饮料", "饮料", 6.0, 12, "🪫"),
-            ("奥利奥饼干", "零食", 6.0, 18, "🍪"),
-            ("原味吐司面包", "零食", 7.0, 14, "🍞"),
-            ("乐事薯片", "零食", 8.0, 16, "🥔"),
-            ("德芙巧克力", "零食", 10.0, 12, "🍫"),
-            ("士力架", "零食", 5.0, 20, "🍬"),
-        ]
+    # 老库迁移：给已存在的 products 表补 name_en 列（CREATE TABLE IF NOT EXISTS 不会改旧表）
+    cols = [r[1] for r in db.execute("PRAGMA table_info(products)").fetchall()]
+    if "name_en" not in cols:
+        db.execute("ALTER TABLE products ADD COLUMN name_en TEXT NOT NULL DEFAULT ''")
+
+    # 初始/重置商品仓库：只要新仓库的 SKU 不全在库里，就清空重灌为 SEED_PRODUCTS（一次性）
+    have = {r[0] for r in db.execute("SELECT name_en FROM products").fetchall()}
+    want = {en for (_n, en, _c, _p, _s, _e) in SEED_PRODUCTS}
+    if not want.issubset(have):
+        db.execute("DELETE FROM products")
+        db.execute("DELETE FROM sqlite_sequence WHERE name='products'")
         ts = now_str()
         db.executemany(
-            "INSERT INTO products(name,category,price,stock,emoji,created_at) VALUES(?,?,?,?,?,?)",
-            [(n, c, p, s, e, ts) for (n, c, p, s, e) in seed],
+            "INSERT INTO products(name,name_en,category,price,stock,emoji,created_at) "
+            "VALUES(?,?,?,?,?,?,?)",
+            [(n, en, c, p, s, e, ts) for (n, en, c, p, s, e) in SEED_PRODUCTS],
         )
     db.commit()
     db.close()
@@ -204,6 +226,13 @@ def snapshot_db(keep=30):
 
 def bump_stat(db, key, delta=1):
     db.execute("UPDATE stats SET value = value + ? WHERE key = ?", (delta, key))
+
+
+def set_stat(db, key, value):
+    db.execute("INSERT OR REPLACE INTO stats(key, value) VALUES(?, ?)", (key, value))
+
+
+PICKUP_TIMEOUT = 120   # 下单后最长等待取走秒数，超时自动结算并收回
 
 
 def stat_val(db, key):
@@ -303,8 +332,14 @@ def api_order():
             return jsonify(ok=False, msg=f"商品 {pid} 不存在"), 400
         if p["stock"] < qty:
             return jsonify(ok=False, msg=f"「{p['name']}」库存不足（剩 {p['stock']}）"), 400
-        line_items.append({"id": p["id"], "name": p["name"], "price": p["price"],
-                           "emoji": p["emoji"], "qty": qty})
+        name_en = p["name_en"] or slug_en(p["name"])
+        li = {"id": p["id"], "name": p["name"], "name_en": name_en,
+              "category": p["category"], "price": p["price"],
+              "emoji": p["emoji"], "qty": qty}
+        note = (it.get("note") or "").strip()   # 自定义商品：顾客填写的需求描述
+        if note:
+            li["note"] = note
+        line_items.append(li)
         need_total += p["price"] * qty
 
     if not line_items:
@@ -326,26 +361,41 @@ def api_order():
                            msg="机器人正在为其他顾客服务，请稍候再下单 🤖"), 409
         for li in line_items:
             li["delivered"] = 0
-        instruction = "；".join(
-            f"抓取「{li['name']}」x{li['qty']} 交付顾客" for li in line_items)
-        items_json = json.dumps(line_items, ensure_ascii=False)
+        # 网站侧订单快照：保留中文名 + emoji 供大屏/后台展示
+        order_items_json = json.dumps(line_items, ensure_ascii=False)
+        # 发给 agent 的任务载荷：纯英文小写下划线字段，不含任何中文
+        agent_items = []
+        for li in line_items:
+            ai = {"id": li["id"], "sku": li["name_en"], "name": li["name_en"],
+                  "category": CATEGORY_EN.get(li.get("category", ""), "snack"),
+                  "price": li["price"], "qty": li["qty"]}
+            if li.get("note"):
+                ai["note"] = li["note"]   # 自定义需求(自由文本)
+            agent_items.append(ai)
+        payload_json = json.dumps(agent_items, ensure_ascii=False)
+        instruction = "; ".join(
+            f"pick {ai['sku']} x{ai['qty']} deliver_to_customer"
+            + (f" note={ai['note']}" if ai.get("note") else "")
+            for ai in agent_items)
         db.execute(
             """INSERT INTO orders(user_id, ip, items, total, arm_exec, arm_success,
                arm_fail, status, created_at) VALUES(?,?,?,?,0,0,0,?,?)""",
-            (uid, ip, items_json, 0.0, "pending", now_str()),
+            (uid, ip, order_items_json, 0.0, "pending", now_str()),
         )
         order_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
         db.execute(
             """INSERT INTO tasks(order_id, user_id, instruction, payload, status, created_at)
                VALUES(?,?,?,?,?,?)""",
-            (order_id, uid, instruction, items_json, "pending", now_str()),
+            (order_id, uid, instruction, payload_json, "pending", now_str()),
         )
         task_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
+        set_stat(db, "pickup_flag", 1)   # 标签置 1：机器人前伸交付，等顾客取走
         db.commit()
         return jsonify(
             ok=True, order_id=order_id, task_id=task_id, status="pending",
             need_total=need_total, coins=user["coins"], items=line_items,
-            msg="订单已创建，等待机械臂执行（agent 轮询中）",
+            pickup_timeout=PICKUP_TIMEOUT,
+            msg="机械臂正在为你取货，取走后请点「确定取走」",
         )
 
     # ---- 模拟模式：本地即时模拟机械臂并结算（无真实机器人时演示用） ----
@@ -434,11 +484,14 @@ def api_add_product():
         return jsonify(ok=False, msg="价格/库存格式错误"), 400
     category = (data.get("category") or "零食").strip()
     emoji = (data.get("emoji") or "📦").strip()
+    # agent 用的英文标识：后台没填就按商品名自动 slug（含中文则回退 item）
+    name_en = (data.get("name_en") or "").strip().lower() or slug_en(name)
 
     db = get_db()
     db.execute(
-        "INSERT INTO products(name,category,price,stock,emoji,created_at) VALUES(?,?,?,?,?,?)",
-        (name, category, price, stock, emoji, now_str()),
+        "INSERT INTO products(name,name_en,category,price,stock,emoji,created_at) "
+        "VALUES(?,?,?,?,?,?,?)",
+        (name, name_en, category, price, stock, emoji, now_str()),
     )
     db.commit()
     pid = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
@@ -507,7 +560,7 @@ def api_arm_report():
 # ============================================================================
 DB_TABLES = {
     "products": {"pk": "id",  "auto": True,
-                 "cols": {"name", "category", "price", "stock", "emoji", "created_at"}},
+                 "cols": {"name", "name_en", "category", "price", "stock", "emoji", "created_at"}},
     "users":    {"pk": "id",  "auto": False,
                  "cols": {"id", "ip", "coins", "visits", "created_at", "last_seen"}},
     "orders":   {"pk": "id",  "auto": True,
@@ -688,7 +741,8 @@ def api_task_report(tid):
     if not order:
         return jsonify(ok=False, msg="关联订单不存在"), 404
 
-    line_items = json.loads(task["payload"] or "[]")
+    # 结算用网站侧订单快照(含中文名/emoji)，payload 是纯英文的 agent 载荷仅供机器人读
+    line_items = json.loads(order["items"] or task["payload"] or "[]")
     reported = (data.get("status") or "").strip()
     # 交付数量：优先取 items 明细；否则 done/success→全交付，其余→全 0
     delivered_map = {}
@@ -756,6 +810,84 @@ def api_exec_log_get():
     rows = db.execute(f"SELECT * FROM exec_logs {where} ORDER BY id DESC LIMIT ?",
                       (*params, limit)).fetchall()
     return jsonify(ok=True, logs=[dict(r) for r in rows])
+
+
+# ============================================================================
+# 取货确认 —— 真机模式：下单后 pickup_flag=1（机械臂交付），顾客点「确定取走」或超时
+# 120s 后结算(扣款/扣库存) + pickup_flag=0（机器人收回）。修复"买完不扣款"。
+# ============================================================================
+def _settle_full(db, order):
+    """按订单明细全额结算(视为全部成功交付)：扣款/扣库存/记机械臂统计，返回 (status, paid)。"""
+    line_items = json.loads(order["items"] or "[]")
+    delivered_map = {str(li["id"]): li.get("qty", 0) for li in line_items}
+    total_qty = sum(int(li.get("qty", 0)) for li in line_items)
+    status, paid = _settle_order(db, order, line_items, delivered_map,
+                                 {"exec": total_qty, "success": total_qty, "fail": 0})
+    db.execute("UPDATE tasks SET status='done', finished_at=? "
+               "WHERE order_id=? AND status IN ('pending','running')",
+               (now_str(), order["id"]))
+    set_stat(db, "pickup_flag", 0)
+    return status, paid
+
+
+@app.route("/api/order/confirm", methods=["POST"])
+def api_order_confirm():
+    """顾客点「确定取走」：结算订单并让机器人收回(pickup_flag=0)。顾客动作，无需令牌。"""
+    data = request.get_json(force=True, silent=True) or {}
+    oid = data.get("order_id")
+    db = get_db()
+    order = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+    if not order:
+        return jsonify(ok=False, msg="订单不存在"), 404
+    if order["status"] != "pending":     # 幂等：已结算直接返回
+        set_stat(db, "pickup_flag", 0)
+        db.commit()
+        u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
+        return jsonify(ok=True, already=True, paid=order["total"],
+                       coins=(u["coins"] if u else None))
+    status, paid = _settle_full(db, order)
+    db.commit()
+    u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
+    return jsonify(ok=True, order_id=oid, order_status=status, paid=paid,
+                   coins=(u["coins"] if u else None), msg="已取走，扣款完成，谢谢惠顾")
+
+
+@app.route("/api/pickup")
+def api_pickup():
+    """机器人/前端轮询取货标签。flag=1: 有订单待取(机械臂前伸交付)；flag=0: 空闲/已取(收回)。
+    下单超过 PICKUP_TIMEOUT 秒未确认 → 自动结算并置 0（机器人收回）。无需令牌。"""
+    db = get_db()
+    task = db.execute(
+        "SELECT * FROM tasks WHERE status IN ('pending','running') ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if not task:
+        set_stat(db, "pickup_flag", 0)
+        db.commit()
+        return jsonify(ok=True, flag=0)
+    order = db.execute("SELECT * FROM orders WHERE id=?", (task["order_id"],)).fetchone()
+    try:
+        waited = (datetime.now() - datetime.strptime(task["created_at"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+    except (ValueError, TypeError):
+        waited = 0
+    remaining = max(0, int(PICKUP_TIMEOUT - waited))
+    if remaining <= 0:                   # 超时：自动结算并收回
+        if order and order["status"] == "pending":
+            _settle_full(db, order)
+        else:
+            db.execute("UPDATE tasks SET status='done', finished_at=? WHERE id=?",
+                       (now_str(), task["id"]))
+            set_stat(db, "pickup_flag", 0)
+        db.commit()
+        return jsonify(ok=True, flag=0, timed_out=True, order_id=task["order_id"])
+    amount = 0.0
+    if order:
+        amount = sum(li.get("price", 0) * li.get("qty", 0)
+                     for li in json.loads(order["items"] or "[]"))
+    set_stat(db, "pickup_flag", 1)
+    db.commit()
+    return jsonify(ok=True, flag=1, order_id=task["order_id"], task_id=task["id"],
+                   remaining=remaining, amount=round(amount, 2),
+                   instruction=task["instruction"])
 
 
 # ============================================================================

@@ -9,6 +9,9 @@
   默认令牌为 `06de644db26bf26dc5fbef2657b5af6b`；服务器环境变量
   `LOOPMASTER_API_TOKEN` 可覆盖默认值。读接口不需要。
 - 金额单位：月亮币（1 月亮币 = 1 元）
+- **语言约定**：网站对顾客展示中文；**与 agent 机器人交互的一切标识/指令一律纯英文小写下划线**
+  （`snake_case`）。商品用 `sku`（= `name_en`）标识，任务 `payload`/`instruction` 全英文，
+  中文名只出现在网站侧展示，不下发给 agent。
 
 ---
 
@@ -22,6 +25,29 @@
 | `0` | 真实机器人 | 只建 `pending` 订单 + 任务，**交给 agent 轮询执行**，report 时才结算 |
 
 真实机器人联调时在服务器设 `ARM_SIMULATE=0` 并重启服务。
+
+---
+
+## 0.1 商品仓库 & 中英映射（agent 只认英文 sku）
+
+网站展示中文名，agent 只用英文 `sku`（即 `products.name_en`，小写下划线）。初始仓库：
+
+| id | 中文名(name) | 英文 sku(name_en) | 分类(category) | 分类英文 | 价格 | 库存 | emoji |
+|---|---|---|---|---|---|---|---|
+| 1 | 可乐   | `cola`          | 饮料   | `drink`  | 3.0 | 20 | 🥤 |
+| 2 | 红牛   | `red_bull`      | 饮料   | `drink`  | 6.0 | 15 | 🐂 |
+| 3 | 瓶装水 | `bottled_water` | 饮料   | `drink`  | 2.0 | 30 | 💧 |
+| 4 | 火腿肠 | `ham_sausage`   | 零食   | `snack`  | 2.0 | 25 | 🌭 |
+| 5 | 香肠   | `sausage`       | 零食   | `snack`  | 3.0 | 20 | 🍖 |
+| 6 | 饼干   | `biscuit`       | 零食   | `snack`  | 5.0 | 18 | 🍪 |
+| 7 | 蛋糕   | `cake`          | 零食   | `snack`  | 8.0 | 12 | 🍰 |
+| 8 | 自定义 | `custom`        | 自定义 | `custom` | 0.0 | 99 | ✨ |
+
+- **`custom`（自定义）**：顾客在下单时填写自由文本需求，随该行 `payload` 项的 `note` 字段一起下发，
+  例如 `note="spicy_chips"`。agent 据 `note` 现场决定抓什么/是否可满足。价格 0，report 时按实结算。
+- 后台 `POST /api/products` 新增商品时可传 `name_en`；不传则由中文名自动 slug（含中文则回退 `item`），
+  建议手动指定英文 sku 以便 agent 稳定识别。
+- 分类中英映射：`饮料→drink`、`零食→snack`、`自定义→custom`。
 
 ---
 
@@ -41,15 +67,18 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 
 `POST /api/order`
 ```json
-{ "user_id": "u001", "items": [ {"id": 1, "qty": 2}, {"id": 8, "qty": 1} ] }
+{ "user_id": "u001", "items": [ {"id": 1, "qty": 2},
+                                {"id": 8, "qty": 1, "note": "spicy_chips"} ] }
 ```
-真实机器人模式返回：
+`items[].note` 仅自定义商品(`custom`)需要，是顾客填写的自由文本需求。真实机器人模式返回：
 ```json
 { "ok": true, "order_id": 12, "task_id": 5, "status": "pending",
-  "need_total": 12.0, "coins": 200.0,
-  "items": [ {"id":1,"name":"可口可乐 330ml","price":3.0,"emoji":"🥤","qty":2,"delivered":0} ] }
+  "need_total": 6.0, "coins": 200.0,
+  "items": [ {"id":1,"name":"可乐","name_en":"cola","category":"饮料",
+              "price":3.0,"emoji":"🥤","qty":2,"delivered":0} ] }
 ```
 > 下单时校验库存与余额，但**不扣款、不扣库存**；等 agent `report` 按实际交付结算。
+> 返回的 `items` 是**网站侧展示快照**（含中文 `name`）；下发给 agent 的是英文 `payload`（见 §3）。
 
 ---
 
@@ -59,15 +88,18 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 ```json
 { "ok": true, "tasks": [
   { "id": 5, "order_id": 12, "user_id": "u001",
-    "instruction": "抓取「可口可乐 330ml」x2 交付顾客；抓取「奥利奥饼干」x1 交付顾客",
-    "payload": "[{\"id\":1,\"name\":\"可口可乐 330ml\",\"price\":3.0,\"emoji\":\"🥤\",\"qty\":2}]",
+    "instruction": "pick cola x2 deliver_to_customer; pick custom x1 deliver_to_customer note=spicy_chips",
+    "payload": "[{\"id\":1,\"sku\":\"cola\",\"name\":\"cola\",\"category\":\"drink\",\"price\":3.0,\"qty\":2},{\"id\":8,\"sku\":\"custom\",\"name\":\"custom\",\"category\":\"custom\",\"price\":0.0,\"qty\":1,\"note\":\"spicy_chips\"}]",
     "status": "pending", "created_at": "2026-07-10 18:00:00" } ] }
 ```
 其它查询：
 - `GET /api/tasks?status=running&limit=20` — 按状态过滤
 - `GET /api/tasks/<id>` — 单个任务详情
 
-`payload` 是 JSON 字符串，解析后每项含 `id/name/price/emoji/qty`。
+**`payload` 与 `instruction` 全部纯英文小写下划线**（agent 直接消费，无需翻译）。
+`payload` 是 JSON 字符串，解析后每项字段：
+`id`(商品 id，report 用它回传交付数)、`sku`/`name`(英文标识 = name_en)、
+`category`(英文分类)、`price`、`qty`、`note?`(仅 `custom` 有，自由文本需求)。
 
 ---
 
@@ -107,7 +139,7 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
   "status": "partial",                       // done/success | partial | failed（可选）
   "items": [ {"id":1,"delivered":2}, {"id":8,"delivered":0} ],  // 每件实际交付数
   "arm": { "exec": 4, "success": 2, "fail": 2 },                 // 机械臂计数(累计到大屏)
-  "code": "DONE", "result": { "note": "cookie 卡料" } }          // result 原样存 tasks.result
+  "code": "DONE", "result": { "note": "biscuit_jammed" } }        // result 原样存 tasks.result
 ```
 服务端据此**一次性结算**：按 `delivered` 扣库存、扣款（月亮币）、累计机械臂统计、定订单状态。
 交付数量优先取 `items`；若不给 `items` 则 `status=done/success`→全交付、其余→全 0。
@@ -196,13 +228,14 @@ for t in tasks:
     tid = t["id"]
     # 2) 认领
     requests.post(f"{BASE}/api/tasks/{tid}/claim", json={"agent_id": "robot_01"}, headers=H)
-    items = __import__("json").loads(t["payload"])
+    items = __import__("json").loads(t["payload"])   # 纯英文：每项含 id/sku/qty/note?
     delivered = []
     for it in items:
-        # 3) 执行 + 上传编码信息
+        # 3) 执行 + 上传编码信息（sku 是英文标识；custom 项读 it.get("note") 决定抓什么）
         requests.post(f"{BASE}/api/exec_log", headers=H, json={
             "task_id": tid, "agent_id": "robot_01",
-            "instruction": f"pick {it['name']} x{it['qty']}",
+            "instruction": f"pick {it['sku']} x{it['qty']}"
+                           + (f" note={it['note']}" if it.get("note") else ""),
             "status": "running", "code": "J1=..,GRIP=.."})
         delivered.append({"id": it["id"], "delivered": it["qty"]})  # 假设全成功
     # 4) 反馈结算
