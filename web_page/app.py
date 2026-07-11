@@ -1339,7 +1339,7 @@ if __name__ == "__main__":
     print("=" * 48)
     print("  麦西 Messi · 双臂销售机器人售卖系统")
     print("  下单页 : http://127.0.0.1:5000/")
-    print("  数据大屏·后台: http://127.0.0.1:5000/dashboard")
+    print("  数据后台: http://127.0.0.1:5000/dashboard")
     print("  智能体页: http://127.0.0.1:5000/loopviz")
     print("=" * 48)
     app.run(host="0.0.0.0", port=5000, debug=True)
