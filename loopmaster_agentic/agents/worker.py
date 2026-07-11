@@ -317,7 +317,9 @@ def _worker_prompt(*, plan: Plan, workspace: Workspace, skills: list[Any] | None
             "step should have timing semantics appropriate to the actuator: duration_s for base velocity, "
             "settle_s for gripper/lift/stop feedback, and velocity_limit_rad_s plus observe/settling for "
             "arm motion. Treat repeated control commands with no duration or settle window as a plan "
-            "defect unless they are explicit zero-duration dry checks. "
+            "defect unless they are explicit zero-duration dry checks. Allow the timer meta skill for "
+            "wall-clock/monotonic time evidence or non-actuator waits; do not require timer when an "
+            "actuator skill already has a suitable duration_s or settle_s argument. "
             "Return proceed=false only for a concrete safety or registry issue."
         ),
         "workspace": str(workspace.root),

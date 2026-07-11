@@ -56,6 +56,7 @@ class LoopMasterAgenticTests(unittest.TestCase):
                 "set_gripper",
                 "set_lift_height",
                 "stop_motion",
+                "timer",
             },
         )
         forbidden_terms = ("atomic", "zeroshot", "robotwin", "sim")
@@ -457,6 +458,21 @@ class LoopMasterAgenticTests(unittest.TestCase):
         self.assertTrue(stop["ok"])
         self.assertEqual(stop["settle_s"], 0.5)
         stop_sleep.assert_called_once_with(0.5)
+
+    def test_timer_skill_records_elapsed_and_wall_time(self) -> None:
+        from loopmaster_agentic.skills.base.meta.timer import policy
+
+        context = SkillContext(platform=DryRunPlatform(), workspace=new_workspace("timer", root=Path("/tmp")))
+        with mock.patch.object(policy.time, "sleep", return_value=None) as sleep:
+            result = policy.dispatch(context, {"duration_s": 0.25, "label": "between actions"})
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["label"], "between actions")
+        self.assertEqual(result["slept_s"], 0.25)
+        self.assertGreaterEqual(result["elapsed_s"], 0.0)
+        self.assertIn("T", result["started_wall_time"])
+        self.assertIn("T", result["ended_wall_time"])
+        sleep.assert_called_once_with(0.25)
 
     def test_move_arm_ee_position_only_target_ignores_orientation(self) -> None:
         from loopmaster_agentic.skills.base.control.move_arm_ee import policy
