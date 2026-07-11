@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>麦西 Messi · 自助售卖</title>
-<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style.css?v=20260711">
 </head>
 <body>
 <div class="topbar">
@@ -85,8 +85,8 @@
 
 <div id="toast" class="toast"></div>
 
-<!-- 项目页脚：品牌简介 + 技术亮点（排版同「关于我们」） -->
-<footer class="site-footer">
+<!-- 项目页脚：品牌简介 + 技术亮点（只在输入名字的界面显示，进入选购后隐藏） -->
+<footer class="site-footer" id="siteFooter">
   <div class="foot-wrap">
     <div class="about-hero">
       <h1>麦西 <span class="mx">Messi</span></h1>
@@ -158,6 +158,7 @@ async function login(){
   document.getElementById('shopView').classList.remove('hidden');
   document.getElementById('walletBox').style.display = 'flex';
   document.getElementById('navLinks').style.display = 'flex';
+  document.getElementById('siteFooter').style.display = 'none';   // 选购页不显示项目简介页脚
   document.getElementById('uidLabel').textContent = d.user_id;
   updateWallet();
   if(d.is_new) toast('🎁 欢迎新用户！已到账 '+d.gift+' 月亮币', 'ok');
@@ -283,6 +284,7 @@ function resetToLogin(){
   document.getElementById('shopView').classList.add('hidden');
   document.getElementById('walletBox').style.display = 'none';
   document.getElementById('navLinks').style.display = 'none';
+  document.getElementById('siteFooter').style.display = '';       // 回到输入名字页恢复页脚
   const inp = document.getElementById('uidInput'); if(inp) inp.value = '';
 }
 // 手机返回手势 / 浏览器前进后退会从 bfcache 恢复旧 DOM（停留在选购页）；
