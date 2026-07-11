@@ -72,7 +72,9 @@ a{color:var(--blue);text-decoration:none}
 }
 .wallet .coin{color:var(--blue)}
 
-.wrap{max-width:1100px;margin:0 auto;padding:20px}
+/* width:100% 必需：body 是 flex column，.wrap 有 margin:0 auto，
+   不显式给宽度会被 auto 外边距压成内容宽度 → 商品栅格塌成单列 */
+.wrap{width:100%;max-width:1100px;margin:0 auto;padding:20px}
 
 /* 登录卡 */
 .login-card{
