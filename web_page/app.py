@@ -242,6 +242,7 @@ def set_stat(db, key, value):
 
 
 PICKUP_TIMEOUT = 120   # 下单后最长等待取走秒数，超时自动结算并收回
+BUSY_TIMEOUT = 60      # 单台机器人「忙碌锁」超时秒数：任务卡在 pending/running 超过此值即视为失效并释放
 
 
 def stat_val(db, key):
@@ -369,11 +370,28 @@ def api_order():
     if not ARM_SIMULATE:
         # 现场只有一台机器人：已有未完成任务(待执行/执行中)时，不允许新用户下单
         busy = db.execute(
-            "SELECT id FROM tasks WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+            "SELECT id, order_id, created_at FROM tasks "
+            "WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
         ).fetchone()
         if busy:
-            return jsonify(ok=False, busy=True,
-                           msg="机器人正在为其他顾客服务，请稍候再下单 🤖"), 409
+            # 忙碌锁超时兜底：任务卡在 pending/running 超过 BUSY_TIMEOUT 秒(agent 崩溃/未上报)，
+            # 视为失效——自动结算并释放，避免所有顾客一直卡在「正在为其他顾客点单」。
+            try:
+                waited = (datetime.now() - datetime.strptime(
+                    busy["created_at"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+            except (ValueError, TypeError):
+                waited = BUSY_TIMEOUT + 1   # 时间解析异常也视为超时，直接释放
+            if waited < BUSY_TIMEOUT:
+                return jsonify(ok=False, busy=True,
+                               msg="机器人正在为其他顾客服务，请稍候再下单 🤖"), 409
+            stale = db.execute("SELECT * FROM orders WHERE id=?", (busy["order_id"],)).fetchone()
+            if stale and stale["status"] == "pending":
+                _settle_full(db, stale)   # 结算卡死订单并把任务标记为 done
+            else:
+                db.execute("UPDATE tasks SET status='done', finished_at=? "
+                           "WHERE status IN ('pending','running')", (now_str(),))
+                set_stat(db, "pickup_flag", 0)
+            db.commit()
         for li in line_items:
             li["delivered"] = 0
         # 网站侧订单快照：保留中文名 + emoji 供大屏/后台展示
