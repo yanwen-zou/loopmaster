@@ -18,3 +18,9 @@ artifacts/
 web_page/vending.db
 web_page/backup/
 web_page_deploy.zip
+
+# 秘钥文件：写接口令牌，只在服务器本地存放，禁止入库
+api_token.txt
+web_page/api_token.txt
+*.secret
+.env

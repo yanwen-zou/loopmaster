@@ -6,8 +6,8 @@
 - Base URL：`http://loopmaster.box2ai.com/`（或 `http://IP:5000/`）
 - 编码：全部 JSON，UTF-8
 - **鉴权**：所有**写接口**需带请求头 `X-API-Token: <令牌>`（或 `?token=`）。
-  默认令牌为 `06de644db26bf26dc5fbef2657b5af6b`；服务器环境变量
-  `LOOPMASTER_API_TOKEN` 可覆盖默认值。读接口不需要。
+  令牌不写在源码里，由服务端从环境变量 `LOOPMASTER_API_TOKEN` 或本地文件
+  `web_page/api_token.txt` 读取，部署时自行设置。读接口不需要。
 - 金额单位：月亮币（1 月亮币 = 1 元）
 - **语言约定**：网站对顾客展示中文；**与 agent 机器人交互的一切标识/指令一律纯英文小写下划线**
   （`snake_case`）。商品用 `sku`（= `name_en`）标识，任务 `payload`/`instruction` 全英文，

@@ -19,7 +19,7 @@ LoopViz 演示推送脚本
     # 停止时顺便删掉本脚本推送过的 run（清场）
     python push_demo.py --token XXX --clean
 
-令牌来源：--token 参数 或 环境变量 LOOPMASTER_API_TOKEN；未设置时使用本地默认令牌。
+令牌来源：--token 参数 或 环境变量 LOOPMASTER_API_TOKEN；都未设置则不带令牌。
 """
 import os
 import re
@@ -31,7 +31,8 @@ import urllib.request
 import urllib.error
 from datetime import datetime
 
-DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
+# 写接口令牌不硬编码：通过 --token 传入，或设环境变量 LOOPMASTER_API_TOKEN。
+DEFAULT_API_TOKEN = ""
 
 # 机械臂/底盘等控制类技能（与后端 LV_CONTROL_SKILLS 保持一致）
 CONTROL = {"send_action", "move_arm_joints", "set_gripper", "set_base_velocity", "set_lift_height"}

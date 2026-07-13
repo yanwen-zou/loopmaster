@@ -37,7 +37,8 @@ from loopmaster_agentic.server_bridge import (
 )
 
 DEFAULT_REMOTE_IP = "192.168.31.22"
-DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
+# 写接口令牌不硬编码：通过 --web-token/--token 传入，或设环境变量 LOOPMASTER_API_TOKEN。
+DEFAULT_API_TOKEN = ""
 
 
 def main(argv: list[str] | None = None) -> int:

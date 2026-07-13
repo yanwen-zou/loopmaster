@@ -41,9 +41,25 @@ ARM_SUCCESS_RATE = 0.90      # 单次抓取成功率
 ARM_MAX_RETRY = 2            # 单个货品最多尝试次数
 NEW_USER_COINS = 200.0       # 新用户赠送月亮币
 
-# 开放给 agent 框架的写接口令牌：环境变量 LOOPMASTER_API_TOKEN 可覆盖默认令牌。
-DEFAULT_API_TOKEN = "06de644db26bf26dc5fbef2657b5af6b"
-API_TOKEN = os.environ.get("LOOPMASTER_API_TOKEN", DEFAULT_API_TOKEN).strip()
+# 开放给 agent 框架的写接口令牌。秘钥只从代码外部读取，源码里不出现明文。
+# 优先级：环境变量 LOOPMASTER_API_TOKEN  >  同目录 api_token.txt（已 gitignore）。
+# 两者都没设时放行——仅为本地开发方便；线上部署务必设置，否则写接口无鉴权。
+def _load_api_token():
+    tok = os.environ.get("LOOPMASTER_API_TOKEN", "").strip()
+    if tok:
+        return tok
+    token_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "api_token.txt")
+    try:
+        with open(token_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+API_TOKEN = _load_api_token()
+if not API_TOKEN:
+    print("[warn] 未配置 LOOPMASTER_API_TOKEN（环境变量或 web_page/api_token.txt），"
+          "写接口当前无鉴权，请在服务器上设置！", flush=True)
 
 app = Flask(__name__)
 # 静态文件（CSS/JS）不长期缓存：改了样式浏览器会重新拉取，避免旧样式卡住布局

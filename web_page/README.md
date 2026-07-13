@@ -64,9 +64,11 @@ POST /api/arm/report   {"success": true}   # 或 false
 ## 开放给 agent 框架的写接口
 
 供 loopmaster agent 框架直接改「数据库内容」和「智能体（LoopViz）内容」。
-**写接口带令牌保护**：默认令牌为 `06de644db26bf26dc5fbef2657b5af6b`。设了环境变量
-`LOOPMASTER_API_TOKEN` 会覆盖默认值；请求头 `X-API-Token`（或 `?token=`）必须匹配。
-**上阿里云建议换成新的随机长串。**
+**写接口带令牌保护**：令牌不写在源码里，服务端从环境变量 `LOOPMASTER_API_TOKEN`
+或本地文件 `web_page/api_token.txt`（已 gitignore）读取；请求头 `X-API-Token`
+（或 `?token=`）必须匹配。**部署时自行设一个随机长串**，例如：
+`export LOOPMASTER_API_TOKEN=$(python -c "import secrets;print(secrets.token_hex(16))")`
+未配置时写接口无鉴权（仅便于本地开发），线上务必设置。
 
 > **网站 ↔ agent 机器人完整对接协议见 [`PROTOCOL.md`](PROTOCOL.md)**（下单→轮询→认领→执行→反馈）。
 
@@ -119,7 +121,7 @@ curl -X POST http://IP:5000/api/db/users -H "X-API-Token: 你的令牌" \
 ```bash
 cd ~/web_page            # 服务器上的实际路径
 pip install -r requirements.txt
-export LOOPMASTER_API_TOKEN=换成随机长串   # 可覆盖默认令牌
+export LOOPMASTER_API_TOKEN=换成随机长串   # 设置写接口令牌
 python app.py            # 已监听 0.0.0.0:5000
 ```
 
