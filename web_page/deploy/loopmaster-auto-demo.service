@@ -1,0 +1,14 @@
+[Unit]
+Description=LoopMaster exhibition idle auto-order check
+After=loopmaster.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/www/wwwroot/loopmaster.box2ai.com/web_page
+Environment=LOOPMASTER_AUTO_DEMO_ENABLED=1
+Environment=LOOPMASTER_AUTO_DEMO_IDLE_SECONDS=600
+Environment=LOOPMASTER_AUTO_DEMO_MIN_IDLE_SECONDS=300
+Environment=LOOPMASTER_AUTO_DEMO_MAX_IDLE_SECONDS=600
+# 巡检脚本不调用 HTTP 写接口；设置内部占位值仅用于避免导入 Flask 应用时输出无关告警。
+Environment=LOOPMASTER_API_TOKEN=auto-demo-internal-not-used
+ExecStart=/www/wwwroot/loopmaster.box2ai.com/web_page/venv/bin/python /www/wwwroot/loopmaster.box2ai.com/web_page/scripts/auto_demo_order.py

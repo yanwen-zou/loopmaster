@@ -1,0 +1,11 @@
+[Unit]
+Description=Check LoopMaster exhibition idle state every 30 seconds
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+Unit=loopmaster-auto-demo.service
+
+[Install]
+WantedBy=timers.target

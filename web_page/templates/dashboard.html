@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>LoopMaster · 管理</title>
+<title>LoopMaster · 库存管理</title>
 <link rel="icon" type="image/png" href="/static/loopmaster_logo.png">
-<link rel="stylesheet" href="/static/style.css?v=20260711g">
+<link rel="stylesheet" href="/static/style.css?v=20260819b">
 </head>
 <body>
 <div class="topbar">
@@ -17,6 +17,9 @@
   <div class="links">
     <span class="muted" id="clock">—</span>
     <a href="/">← 返回首页</a>
+    <form method="post" action="/admin/logout" style="display:inline">
+      <button class="nav-button" type="submit">退出管理</button>
+    </form>
   </div>
 </div>
 
@@ -48,7 +51,52 @@
   </table>
 
   <!-- ===================== 后台管理 ===================== -->
-  <div class="section-title">➕ 新增货品</div>
+  <div class="section-title">🎪 展会自动抓取</div>
+  <div class="login-card" style="margin:0 0 8px;max-width:none">
+    <div class="two-col" style="align-items:center">
+      <div>
+        <div id="autoDemoState" style="font-size:17px;font-weight:800">正在读取状态…</div>
+        <p id="autoDemoDetail" class="muted" style="margin-top:8px;font-size:13px;line-height:1.7">
+          每轮随机等待 5～10 分钟；无人访问、登录或下单时，随机抓取一件有库存的饮料。
+        </p>
+        <p id="autoDemoLast" class="muted" style="margin-top:4px;font-size:12px"></p>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
+        <button id="autoDemoTrigger" class="btn ghost" style="width:auto;min-width:168px"
+                onclick="triggerRandomGrab()" disabled>
+          🎲 立即随机抓取
+        </button>
+        <button id="autoDemoToggle" class="btn" style="width:auto;min-width:168px"
+                role="switch" aria-checked="false" onclick="toggleAutoDemo()" disabled>
+          加载中…
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-title">🎬 演示轨迹直放</div>
+  <div class="login-card" style="margin:0 0 8px;max-width:none">
+    <div class="two-col" style="align-items:end">
+      <div>
+        <label for="demoEpisode">缓存轨迹编号</label>
+        <input id="demoEpisode" type="number" min="0" step="1" placeholder="例如：0">
+        <p id="demoTrajectoryState" class="muted" style="margin-top:8px;font-size:13px;line-height:1.7">
+          正在读取当前任务…
+        </p>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap">
+        <button id="demoCancelButton" class="btn warning" style="width:auto;min-width:168px"
+                onclick="cancelCurrentTask()" disabled>停止并取消当前任务</button>
+        <button id="demoRunButton" class="btn" style="width:auto;min-width:210px"
+                onclick="runDemoTrajectory()" disabled>取消当前任务并运行轨迹</button>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:10px;font-size:12px">
+      仅供现场演示：会停止并结束当前等待中/执行中的订单，再跳过视觉识别与规划，直接回放指定缓存轨迹。
+    </p>
+  </div>
+
+  <div class="section-title">➕ 上架新商品</div>
   <div class="login-card" style="margin:0;max-width:none">
     <div class="two-col">
       <div><label>商品名（中文）</label><input id="p_name" placeholder="如：怡宝矿泉水"></div>
@@ -57,15 +105,15 @@
     </div>
     <div class="two-col">
       <div><label>分类</label>
-        <select id="p_cat"><option>饮料</option><option>零食</option><option>自定义</option></select></div>
+        <select id="p_cat"><option>饮料</option><option>零食</option><option>日用品</option><option>自定义</option></select></div>
       <div></div>
     </div>
     <div class="two-col">
-      <div><label>售价（元 / 月亮币）</label><input id="p_price" type="number" step="0.5" placeholder="3.0"></div>
-      <div><label>初始库存</label><input id="p_stock" type="number" placeholder="20"></div>
+      <div><label>售价（元 / 月亮币）</label><input id="p_price" type="number" min="0" step="0.5" placeholder="3.0"></div>
+      <div><label>初始库存</label><input id="p_stock" type="number" min="0" step="1" placeholder="20"></div>
     </div>
     <div><label>图标 Emoji</label><input id="p_emoji" placeholder="🥤" maxlength="4"></div>
-    <button class="btn mt" onclick="addProduct()">加入货篮商品库</button>
+    <button class="btn mt" onclick="addProduct()">上架到购买页</button>
   </div>
 
   <div class="section-title">💾 数据备份</div>
@@ -80,9 +128,9 @@
     <div id="backupList" class="mt muted" style="font-size:12px"></div>
   </div>
 
-  <div class="section-title">📦 库存管理 / 补货</div>
+  <div class="section-title">📦 库存管理</div>
   <table>
-    <thead><tr><th>ID</th><th>商品</th><th>分类</th><th>售价</th><th>库存</th><th>补货</th></tr></thead>
+    <thead><tr><th>ID</th><th>商品</th><th>分类</th><th>售价</th><th>当前库存</th><th>调整库存</th><th>快速补货</th></tr></thead>
     <tbody id="rows"></tbody>
   </table>
 </div>
@@ -95,6 +143,15 @@ function toast(msg,type){
   const t=document.getElementById('toast');
   t.textContent=msg; t.className='toast show '+(type||'');
   clearTimeout(window._t); window._t=setTimeout(()=>t.className='toast',2400);
+}
+
+async function adminFetch(url, options){
+  const response = await fetch(url, options);
+  if(response.status === 401){
+    window.location.href = '/admin/login?next=' + encodeURIComponent(window.location.pathname);
+    throw new Error('admin session expired');
+  }
+  return response;
 }
 
 /* ---------- 数据大屏 ---------- */
@@ -135,7 +192,11 @@ async function load(){
       <td style="color:var(--orange)">☾${p.price.toFixed(1)}</td>
       <td class="${p.stock<=5?'':''}" style="${p.stock<=5?'color:var(--red)':''}">${p.stock}</td>
       <td>
-        <input type="number" id="add${p.id}" placeholder="+数量" style="width:90px;display:inline-block;padding:7px">
+        <input type="number" id="stock${p.id}" min="0" step="1" value="${p.stock}" aria-label="${p.name} 库存" style="width:90px;display:inline-block;padding:7px">
+        <button class="btn sm" style="width:auto" onclick="setStock(${p.id})">保存</button>
+      </td>
+      <td>
+        <input type="number" id="add${p.id}" min="1" step="1" placeholder="+数量" style="width:90px;display:inline-block;padding:7px">
         <button class="btn sm" style="width:auto" onclick="restock(${p.id})">补货</button>
       </td>
     </tr>`).join('');
@@ -147,7 +208,7 @@ async function addProduct(){
     price: p_price.value, stock: p_stock.value, emoji: p_emoji.value.trim()||'📦'
   };
   if(!body.name){ toast('请填商品名','err'); return; }
-  const d = await (await fetch('/api/products',{method:'POST',
+  const d = await (await adminFetch('/api/products',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
   if(!d.ok){ toast(d.msg||'失败','err'); return; }
   toast('✅ 已新增商品 #'+d.id,'ok');
@@ -157,19 +218,139 @@ async function addProduct(){
 async function restock(id){
   const add = document.getElementById('add'+id).value;
   if(!add){ toast('请填补货数量','err'); return; }
-  const d = await (await fetch('/api/products/'+id+'/restock',{method:'POST',
+  const d = await (await adminFetch('/api/products/'+id+'/restock',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({add})})).json();
   if(!d.ok){ toast(d.msg||'失败','err'); return; }
   toast('✅ 库存已更新为 '+d.stock,'ok'); load();
 }
+async function setStock(id){
+  const stock = document.getElementById('stock'+id).value;
+  if(stock === '' || Number(stock) < 0){ toast('请填写有效库存','err'); return; }
+  const d = await (await adminFetch('/api/products/'+id+'/stock',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({stock})})).json();
+  if(!d.ok){ toast(d.msg||'失败','err'); return; }
+  toast('✅ 库存已调整为 '+d.stock,'ok'); load();
+}
+let autoDemoEnabled = false;
+function fmtSeconds(seconds){
+  const s = Math.max(0, Number(seconds)||0);
+  return `${Math.floor(s/60)}分${String(Math.floor(s%60)).padStart(2,'0')}秒`;
+}
+async function loadAutoDemo(){
+  const d = await (await adminFetch('/api/auto-demo')).json();
+  if(!d.ok){ toast(d.msg||'读取自动抓取状态失败','err'); return; }
+  autoDemoEnabled = d.enabled;
+  const state = document.getElementById('autoDemoState');
+  const detail = document.getElementById('autoDemoDetail');
+  const last = document.getElementById('autoDemoLast');
+  const button = document.getElementById('autoDemoToggle');
+  const trigger = document.getElementById('autoDemoTrigger');
+  state.textContent = d.enabled ? '🟢 自动抓取已开启' : '⚪ 自动抓取已关闭';
+  if(d.enabled){
+    detail.textContent = d.robot_busy
+      ? '机器人正在执行任务；空闲后再继续计时检查。'
+      : (d.remaining > 0
+        ? `本轮随机阈值 ${fmtSeconds(d.next_interval_seconds)}；已空闲 ${fmtSeconds(d.idle_for)}，约 ${fmtSeconds(d.remaining)} 后触发。`
+        : '已达到空闲阈值，下一次巡检将随机发送一笔饮料订单。');
+    button.textContent = '关闭自动抓取';
+    button.className = 'btn warning';
+  }else{
+    detail.textContent = '定时巡检仍保持运行，但不会创建自动订单；“立即随机抓取”仍可手动使用。';
+    button.textContent = '开启自动抓取';
+    button.className = 'btn';
+  }
+  if(d.last_auto_task){
+    const statusText = ({done:'已完成',running:'执行中',pending:'等待认领',failed:'失败'})[d.last_auto_task.status] || d.last_auto_task.status;
+    last.textContent = `最近随机任务 #${d.last_auto_task.task_id}：${d.last_auto_product||'饮料'} · ${statusText} · ${d.last_auto_task.created_at}`;
+  }else{
+    last.textContent = '尚无随机抓取记录';
+  }
+  button.disabled = false;
+  trigger.disabled = d.robot_busy;
+  trigger.textContent = d.robot_busy ? '🤖 机器人忙碌中' : '🎲 立即随机抓取';
+  button.setAttribute('aria-checked', String(d.enabled));
+}
+async function toggleAutoDemo(){
+  const button = document.getElementById('autoDemoToggle');
+  button.disabled = true;
+  const d = await (await adminFetch('/api/auto-demo',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:!autoDemoEnabled})})).json();
+  if(!d.ok){ toast(d.msg||'切换失败','err'); button.disabled=false; return; }
+  toast(d.enabled ? '✅ 自动抓取已开启，本轮将随机等待 5～10 分钟' : '⏸ 自动抓取已关闭','ok');
+  await loadAutoDemo();
+}
+async function triggerRandomGrab(){
+  if(!confirm('确认立即随机选择一件有库存的饮料并发送给机器人？')) return;
+  const button = document.getElementById('autoDemoTrigger');
+  button.disabled = true; button.textContent = '正在创建任务…';
+  const response = await adminFetch('/api/auto-demo/trigger',{method:'POST'});
+  const d = await response.json();
+  if(!d.ok){ toast(d.msg||'随机抓取失败','err'); await loadAutoDemo(); return; }
+  toast(`✅ 已随机选择「${d.product_name}」，任务 #${d.task_id} 已发送`,'ok');
+  await loadAutoDemo(); refresh();
+}
+let demoEpisodes = [];
+async function loadDemoTrajectory(){
+  const d = await (await adminFetch('/api/demo-trajectory')).json();
+  if(!d.ok){ toast(d.msg||'读取演示轨迹状态失败','err'); return; }
+  demoEpisodes = d.episodes || [];
+  const state = document.getElementById('demoTrajectoryState');
+  const cancelButton = document.getElementById('demoCancelButton');
+  const runButton = document.getElementById('demoRunButton');
+  const input = document.getElementById('demoEpisode');
+  if(demoEpisodes.length){
+    input.min = demoEpisodes[0]; input.max = demoEpisodes[demoEpisodes.length-1];
+    input.placeholder = `可用：${demoEpisodes.join('、')}`;
+    runButton.disabled = false;
+  }else{
+    state.textContent = '⚠️ 服务器未找到缓存轨迹';
+    runButton.disabled = true;
+  }
+  if(d.active_task){
+    const statusText = d.active_task.status === 'running' ? '执行中' : '等待认领';
+    state.textContent = `当前任务 #${d.active_task.id} · ${statusText} · ${d.active_task.instruction||'—'}`;
+    cancelButton.disabled = false;
+  }else if(demoEpisodes.length){
+    state.textContent = `机器人当前空闲；可用轨迹：${demoEpisodes.join('、')}`;
+    cancelButton.disabled = true;
+  }
+}
+async function cancelCurrentTask(){
+  if(!confirm('确认立即停止机械臂并取消当前任务？未交付订单不会扣款或扣库存。')) return;
+  const button = document.getElementById('demoCancelButton');
+  button.disabled = true; button.textContent = '正在取消…';
+  const d = await (await adminFetch('/api/demo-trajectory/cancel',{method:'POST'})).json();
+  button.textContent = '停止并取消当前任务';
+  if(!d.ok){ toast(d.msg||'取消失败','err'); await loadDemoTrajectory(); return; }
+  toast(d.cancelled_task_ids.length ? `✅ 已取消任务 #${d.cancelled_task_ids.join('、#')}` : '当前没有任务','ok');
+  await loadDemoTrajectory(); await loadAutoDemo(); refresh();
+}
+async function runDemoTrajectory(){
+  const raw = document.getElementById('demoEpisode').value.trim();
+  if(raw === '' || !Number.isInteger(Number(raw)) || !demoEpisodes.includes(Number(raw))){
+    toast(`请输入可用轨迹编号：${demoEpisodes.join('、')}`,'err'); return;
+  }
+  if(!confirm(`确认停止并取消当前任务，然后直接运行轨迹 ${raw}？请先确认机械臂周围安全。`)) return;
+  const button = document.getElementById('demoRunButton');
+  button.disabled = true; button.textContent = '正在下发…';
+  const response = await adminFetch('/api/demo-trajectory/run',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({episode:Number(raw)})});
+  const d = await response.json();
+  button.textContent = '取消当前任务并运行轨迹';
+  if(!d.ok){ toast(d.msg||'轨迹下发失败','err'); await loadDemoTrajectory(); return; }
+  const cancelled = d.cancelled_task_ids.length ? `，已取消 #${d.cancelled_task_ids.join('、#')}` : '';
+  toast(`✅ 轨迹 ${d.episode} 已下发为任务 #${d.task_id}${cancelled}`,'ok');
+  await loadDemoTrajectory(); await loadAutoDemo(); refresh();
+}
 async function doBackup(){
-  const d = await (await fetch('/api/backup',{method:'POST'})).json();
+  const d = await (await adminFetch('/api/backup',{method:'POST'})).json();
   if(!d.ok){ toast(d.msg||'备份失败','err'); return; }
   toast('✅ 已备份：'+d.file+'（共 '+d.total+' 份）','ok');
   loadBackups();
 }
 async function loadBackups(){
-  const d = await (await fetch('/api/backups')).json();
+  const d = await (await adminFetch('/api/backups')).json();
   if(!d.ok || !d.backups.length){ document.getElementById('backupList').textContent='（暂无备份）'; return; }
   document.getElementById('backupList').innerHTML =
     '最近备份（共 '+d.backups.length+' 份）：<br>' +
@@ -177,9 +358,11 @@ async function loadBackups(){
 }
 
 /* ---------- 启动 ---------- */
-refresh(); tick(); load(); loadBackups();
+refresh(); tick(); load(); loadBackups(); loadAutoDemo(); loadDemoTrajectory();
 setInterval(refresh, 3000);
 setInterval(tick, 1000);
+setInterval(loadAutoDemo, 30000);
+setInterval(loadDemoTrajectory, 3000);
 </script>
 </body>
 </html>

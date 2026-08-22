@@ -36,7 +36,7 @@
 |---|---|---|---|---|---|---|---|
 | 1 | 可乐   | `cola`          | 饮料   | `drink`  | 3.0 | 20 | 🥤 |
 | 2 | 红牛   | `red_bull`      | 饮料   | `drink`  | 6.0 | 15 | 🐂 |
-| 3 | 瓶装水 | `bottled_water` | 饮料   | `drink`  | 2.0 | 30 | 💧 |
+| 3 | 农夫山泉饮料 | `nongfu` | 饮料 | `drink` | 2.0 | 100 | 💧 |
 | 4 | 火腿肠 | `ham_sausage`   | 零食   | `snack`  | 2.0 | 25 | 🌭 |
 | 5 | 香肠   | `sausage`       | 零食   | `snack`  | 3.0 | 20 | 🍖 |
 | 6 | 饼干   | `biscuit`       | 零食   | `snack`  | 5.0 | 18 | 🍪 |
@@ -99,7 +99,8 @@ POST /api/order   →   GET /api/tasks/pending → POST .../claim → POST /api/
 **`payload` 与 `instruction` 全部纯英文小写下划线**（agent 直接消费，无需翻译）。
 `payload` 是 JSON 字符串，解析后每项字段：
 `id`(商品 id，report 用它回传交付数)、`sku`/`name`(英文标识 = name_en)、
-`category`(英文分类)、`price`、`qty`、`note?`(仅 `custom` 有，自由文本需求)。
+`category`(英文分类)、`price`、`qty`、`note?`(仅 `custom` 有，自由文本需求)、
+`vision_prompt?`（可选的纯英文视觉外形描述；用于区分共享品牌标签但外形不同的商品）。
 
 ---
 

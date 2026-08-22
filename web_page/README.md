@@ -16,8 +16,8 @@ python web_page/test/push_demo.py
 | 页面 | 地址 | 用途 |
 |---|---|---|
 | 下单页 | http://127.0.0.1:5000/ | 顾客扫码进入，填 ID 购物 |
-| 数据大屏 | http://127.0.0.1:5000/dashboard | 路演实时展示各项指标 |
-| 后台管理 | http://127.0.0.1:5000/admin | 新增商品 / 补货 |
+| 库存管理 | http://127.0.0.1:5000/dashboard | 密码登录后查看指标、上架商品和调整库存 |
+| 管理员登录 | http://127.0.0.1:5000/admin/login | 默认密码 `loopmaster` |
 
 局域网 / 手机扫码：用本机 IP 替换 127.0.0.1（服务已监听 0.0.0.0:5000）。
 可用 `http://本机IP:5000/` 生成二维码贴到机器人上。
@@ -39,6 +39,15 @@ ARM_MAX_RETRY    = 2       # 单件最多尝试次数
 NEW_USER_COINS   = 200.0   # 新用户赠币
 ```
 
+库存管理密码默认是 `loopmaster`，部署时可通过环境变量修改：
+
+```bash
+export LOOPMASTER_ADMIN_PASSWORD=你的管理密码
+export LOOPMASTER_SESSION_SECRET=随机长串
+```
+
+生产部署或多进程运行时请固定设置 `LOOPMASTER_SESSION_SECRET`；本地未设置时会在每次启动时随机生成。
+
 ## 硬件联调（真实机器人上报机械臂结果）
 
 把 `ARM_SIMULATE` 设为 `False`，机器人每完成一次抓取动作调用：
@@ -57,8 +66,12 @@ POST /api/arm/report   {"success": true}   # 或 false
 | GET  | `/api/products` | 商品列表（含库存） |
 | POST | `/api/order` | `{user_id, items:[{id,qty}]}` 下单 |
 | GET  | `/api/stats` | 全部运营指标 + 最近订单 |
-| POST | `/api/products` | 新增商品 |
-| POST | `/api/products/<id>/restock` | `{add}` 补货 |
+| POST 🔒| `/api/products` | 新增并上架商品（需库存管理员登录） |
+| POST 🔒| `/api/products/<id>/stock` | `{stock}` 设置库存（需库存管理员登录） |
+| POST 🔒| `/api/products/<id>/restock` | `{add}` 补货（需库存管理员登录） |
+| GET 🔒 | `/api/demo-trajectory` | 查看当前任务和可直接回放的缓存轨迹 |
+| POST 🔒| `/api/demo-trajectory/cancel` | 停止并取消当前 pending/running 任务 |
+| POST 🔒| `/api/demo-trajectory/run` | `{episode}` 取消当前任务并直接回放指定轨迹 |
 | POST | `/api/arm/report` | `{success}` 真实机械臂上报 |
 
 ## 开放给 agent 框架的写接口
@@ -127,7 +140,17 @@ python app.py            # 已监听 0.0.0.0:5000
 
 - 阿里云安全组放行 **TCP 5000**，用 `http://公网IP:5000/` 访问 / 生成二维码。
 - 生产建议用 `gunicorn -w 2 -b 0.0.0.0:5000 app:app` + nginx 反代，并关掉 `app.py` 里的 `debug=True`。
-- 可选环境变量：`LOOPMASTER_WORKSPACE_ROOT`（运行产物目录）、`LOOPMASTER_SKILL_ROOT`（技能目录）。
+- 可选环境变量：`LOOPMASTER_WORKSPACE_ROOT`（运行产物目录）、`LOOPMASTER_SKILL_ROOT`（技能目录）、
+  `LOOPMASTER_PICKUP_TIMEOUT`（取货等待秒数，默认 100）、`LOOPMASTER_BUSY_TIMEOUT`（忙碌锁秒数，默认 180）。
+
+### 展会空闲自动演示
+
+`deploy/loopmaster-auto-demo.service` 与 `.timer` 每 30 秒检查一次：每轮随机选择 5～10 分钟；期间没有主页访问、登录或下单，且机器人没有 `pending/running` 任务时，从有库存的饮料中随机创建一笔单件订单。自定义商品和售罄商品不会被选中。库存管理页也可点击“立即随机抓取”手动建单。
+
+- 随机范围：`LOOPMASTER_AUTO_DEMO_MIN_IDLE_SECONDS` / `LOOPMASTER_AUTO_DEMO_MAX_IDLE_SECONDS`，默认 `300`～`600` 秒。
+- 临时停用：`systemctl stop loopmaster-auto-demo.timer`。
+- 恢复启用：`systemctl enable --now loopmaster-auto-demo.timer`。
+- 查看状态：`systemctl list-timers loopmaster-auto-demo.timer`。
 
 ## 数据持久化（重要）
 
@@ -158,4 +181,4 @@ cp backup/vending_2026-07-10_122920.db vending.db
 
 ## 重置数据
 
-删除 `vending.db` 后重启即可恢复初始 12 款商品、清空所有统计（谨慎操作，**先备份**）。
+删除 `vending.db` 后重启即可恢复初始 20 款商品、清空所有统计（谨慎操作，**先备份**）。

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
 <title>LoopMaster · 自进化学习具身系统</title>
 <link rel="icon" type="image/png" href="/static/loopmaster_logo.png">
-<link rel="stylesheet" href="/static/style.css?v=20260711g">
+<link rel="stylesheet" href="/static/style.css?v=20260819f">
 </head>
 <body>
 <div class="topbar">
@@ -15,6 +15,7 @@
     <div>LoopMaster<br><small>自进化学习具身系统</small></div>
   </div>
   <div class="links">
+    <a href="/dashboard" class="inventory-link">📦 库存管理</a>
     <div class="wallet" id="walletBox" style="display:none">
       <span id="uidLabel">—</span>｜<span class="coin">☾ <span id="coinLabel">0</span></span>
     </div>
@@ -49,6 +50,7 @@
     <div id="mConfirm">
       <div class="m-emoji" id="mEmoji">🥤</div>
       <div class="m-title">确认选购？确定后机械臂立即抓取</div>
+      <div id="queueNotice" class="queue-notice hidden"></div>
       <div class="m-name" id="mName">商品名</div>
       <div class="m-price">单价 <b>☾<span id="mPrice">0</span></b></div>
       <div id="mNoteBox" class="hidden" style="margin:10px 0">
@@ -77,10 +79,28 @@
       <div class="m-title" id="mGrabName">正在抓取商品</div>
       <div id="mGrabActions" style="display:none;margin-top:18px">
         <div class="m-title" style="margin-bottom:10px">取到商品后点「确定取走」即可完成付款</div>
-        <div class="m-actions"><button class="btn" onclick="confirmPickup()">✅ 确定取走</button></div>
+        <div class="m-actions">
+          <button id="pickupFailBtn" class="btn warning" onclick="reportPickupFailure()">❌ 抓取失败</button>
+          <button id="pickupConfirmBtn" class="btn" onclick="confirmPickup()">✅ 确定取走</button>
+        </div>
       </div>
     </div>
-    <!-- 3. 结果视图 -->
+    <!-- 3. 评价视图：点击星星即提交评分 -->
+    <div id="mRating" class="hidden">
+      <div class="m-emoji">💫</div>
+      <div class="m-name">请为本次服务评分</div>
+      <div class="m-title">点击星星即可完成评分</div>
+      <div class="rating-detail" id="ratingDetail"></div>
+      <div class="star-rating" role="radiogroup" aria-label="订单评分" onmouseleave="restoreRatingStars()">
+        <button type="button" data-score="1" role="radio" aria-checked="false" aria-label="1 星" onmouseenter="previewRatingStars(1)" onclick="submitRating(1)">★</button>
+        <button type="button" data-score="2" role="radio" aria-checked="false" aria-label="2 星" onmouseenter="previewRatingStars(2)" onclick="submitRating(2)">★</button>
+        <button type="button" data-score="3" role="radio" aria-checked="false" aria-label="3 星" onmouseenter="previewRatingStars(3)" onclick="submitRating(3)">★</button>
+        <button type="button" data-score="4" role="radio" aria-checked="false" aria-label="4 星" onmouseenter="previewRatingStars(4)" onclick="submitRating(4)">★</button>
+        <button type="button" data-score="5" role="radio" aria-checked="false" aria-label="5 星" onmouseenter="previewRatingStars(5)" onclick="submitRating(5)">★</button>
+      </div>
+      <div class="rating-status" id="ratingStatus">请选择 1～5 星</div>
+    </div>
+    <!-- 4. 失败/异常结果视图 -->
     <div id="mResult" class="hidden">
       <div class="m-emoji" id="rIcon">✅</div>
       <div class="m-name" id="rTitle">抓取成功</div>
@@ -193,23 +213,25 @@ async function loadProducts(){
 function render(){
   const cats = {};
   PRODUCTS.forEach(p => { (cats[p.category] = cats[p.category] || []).push(p); });
-  const CAT_ICON = {'饮料':'🥤','零食':'🍪','自定义':'✨'};
+  const CAT_ICON = {'饮料':'🥤','零食':'🍪','日用品':'🧻','自定义':'✨'};
   let html = '';
   for(const cat in cats){
     html += `<div class="section-title">${CAT_ICON[cat]||'📦'} ${cat}</div><div class="grid">`;
     cats[cat].forEach(p => {
       const isCustom = p.name_en === 'custom';
+      const isCestbon = p.name_en === 'cestbon_water';
+      const showFullProduct = isCestbon || p.name_en === 'oriental_leaf_jasmine_tea';
       const out = p.stock <= 0;
       html += `
       <div class="card ${out?'out':''}" ${out?'':`onclick="askItem(${p.id})"`}>
-        ${p.image ? `<div class="emoji img"><img src="/static/assets/${p.image}" alt="${p.name}" loading="lazy"></div>` : `<div class="emoji">${p.emoji}</div>`}
+        ${p.image ? `<div class="emoji img"><img class="${showFullProduct?'product-contain':''}" src="/static/assets/${p.image}" alt="${p.name}" loading="lazy"></div>` : `<div class="emoji">${p.emoji}</div>`}
         <div class="name">${p.name}</div>
         <div class="row">
           <span class="price">${isCustom ? '按需' : p.price.toFixed(1)}</span>
           ${isCustom ? '<span class="stock">📝 填写需求</span>' : `<span class="stock ${p.stock<=5?'low':''}">剩 ${p.stock}</span>`}
         </div>
         <div class="row">
-          ${out ? '<span class="muted">已售罄</span>' : '<span class="tap">👆 点击选购</span>'}
+          ${out ? '<span class="muted sold-out">已售罄</span>' : '<span class="tap">👆 点击选购</span>'}
         </div>
       </div>`;
     });
@@ -222,6 +244,7 @@ function render(){
 function showState(s){
   document.getElementById('mConfirm').classList.toggle('hidden', s!=='confirm');
   document.getElementById('mGrab').classList.toggle('hidden', s!=='grab');
+  document.getElementById('mRating').classList.toggle('hidden', s!=='rating');
   document.getElementById('mResult').classList.toggle('hidden', s!=='result');
 }
 
@@ -230,8 +253,12 @@ function askItem(id){
   if(!p || p.stock<=0){ toast('已售罄', 'err'); return; }
   MODAL_ID = id;
   MODAL_QTY = 1;
+  document.getElementById('queueNotice').classList.add('hidden');
   const mE = document.getElementById('mEmoji');
-  if(p.image){ mE.innerHTML = `<img src="/static/assets/${p.image}" alt="${p.name}" style="width:130px;height:130px;object-fit:cover;border-radius:18px">`; }
+  if(p.image){
+    const fit = ['cestbon_water', 'oriental_leaf_jasmine_tea'].includes(p.name_en) ? 'contain' : 'cover';
+    mE.innerHTML = `<img src="/static/assets/${p.image}" alt="${p.name}" style="width:130px;height:130px;object-fit:${fit};border-radius:18px;background:#fff">`;
+  }
   else { mE.textContent = p.emoji; }
   document.getElementById('mName').textContent = p.name;
   document.getElementById('mPrice').textContent = p.price.toFixed(1);
@@ -255,6 +282,46 @@ function syncModal(){
   document.getElementById('mSub').textContent = '合计 ☾' + (p.price*MODAL_QTY).toFixed(1);
 }
 
+function newOrderRequestId(){
+  if(window.crypto && typeof window.crypto.randomUUID === 'function') return window.crypto.randomUUID();
+  return `order-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+async function fetchJsonWithRetry(url, options={}, maxAttempts=4){
+  const retryable = new Set([429, 502, 503, 504]);
+  let lastError = null;
+  for(let attempt=0; attempt<maxAttempts; attempt++){
+    try{
+      const response = await fetch(url, options);
+      if(retryable.has(response.status) && attempt+1 < maxAttempts){
+        const retryAfter = response.headers.get('Retry-After');
+        let delayMs = 500 * (2 ** attempt);
+        if(retryAfter){
+          const seconds = Number(retryAfter);
+          const dateMs = Date.parse(retryAfter);
+          if(Number.isFinite(seconds)) delayMs = seconds * 1000;
+          else if(Number.isFinite(dateMs)) delayMs = Math.max(dateMs - Date.now(), 0);
+        }
+        await sleep(Math.min(Math.max(delayMs, 0), 8000));
+        continue;
+      }
+      const text = await response.text();
+      let payload;
+      try{ payload = text ? JSON.parse(text) : {}; }
+      catch(e){ payload = {ok:false, msg:`服务暂时不可用 (HTTP ${response.status})`}; }
+      if(!response.ok && payload.ok !== false) payload.ok = false;
+      return payload;
+    }catch(error){
+      lastError = error;
+      if(attempt+1 < maxAttempts){
+        await sleep(Math.min(500 * (2 ** attempt), 8000));
+        continue;
+      }
+    }
+  }
+  return {ok:false, msg:'网络连接失败，请稍后重试', error:String(lastError||'')};
+}
+
 async function confirmItem(){
   if(BUSY) return;
   const p = PRODUCTS.find(x=>x.id===MODAL_ID);
@@ -269,22 +336,34 @@ async function confirmItem(){
   document.getElementById('mGrabName').textContent = `正在抓取 ${p.emoji}${p.name} ×${MODAL_QTY}`;
   document.getElementById('mGrabActions').style.display = 'none';   // 默认不显示确认按钮
   showState('grab');
-  await sleep(900);   // 让"机械臂抓取中"动画呈现
+  await sleep(50);    // 只让浏览器完成一次渲染，立即向服务器创建任务
 
   const item = {id: MODAL_ID, qty: MODAL_QTY};
   if(note) item.note = note;
+  const requestId = newOrderRequestId();
   let d;
   try{
-    const r = await fetch('/api/order', {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({user_id: USER.user_id, items:[item]})});
-    d = await r.json();
+    d = await fetchJsonWithRetry('/api/order', {
+      method:'POST',
+      headers:{'Content-Type':'application/json', 'Idempotency-Key':requestId},
+      body:JSON.stringify({user_id:USER.user_id, items:[item], request_id:requestId})
+    });
   }catch(e){ d = {ok:false, msg:'网络错误'}; }
   BUSY = false;
 
-  if(!d.ok){ showState('confirm'); toast(d.msg||'下单失败', 'err'); return; }
+  if(!d.ok){
+    showState('confirm');
+    if(d.busy){
+      const notice = document.getElementById('queueNotice');
+      notice.textContent = d.msg || '请排队：机器人正在处理前一位顾客的订单';
+      notice.classList.remove('hidden');
+    }
+    toast(d.msg||'下单失败', 'err');
+    return;
+  }
 
   // 真机模式：下单只建任务，原地等待 agent 上报完成；同时给「确定取走」按钮，
-  // 顾客取到货可手动完成（自定义商品 agent 无法履约时的兜底），120s 服务器也会自动结算
+  // 顾客取到货可手动完成（自定义商品 agent 无法履约时的兜底），服务器超时后也会自动结算
   if(d.status === 'pending'){
     document.getElementById('mGrabName').textContent =
       `机械臂正在为你取货 ${p.emoji}${p.name} ×${MODAL_QTY}…`;
@@ -298,16 +377,12 @@ async function confirmItem(){
   USER.coins = d.coins;
   updateWallet();
   const a = d.arm;
-  const rIcon = document.getElementById('rIcon');
-  const rTitle = document.getElementById('rTitle');
-  if(d.status==='success'){ rIcon.textContent='✅'; rTitle.textContent='抓取成功'; }
-  else if(d.status==='partial'){ rIcon.textContent='⚠️'; rTitle.textContent='部分抓取成功'; }
-  else { rIcon.textContent='❌'; rTitle.textContent='抓取失败'; }
-  document.getElementById('rDetail').innerHTML =
+  const detail =
     `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` +
     (d.paid>0 ? `已扣 <b class="coin">☾${d.paid.toFixed(0)}</b>，余额 ☾${d.coins.toFixed(0)}`
               : '本次未扣款');
-  showState('result');
+  if(d.status==='success' || d.status==='partial') showRating(d.order_id, detail);
+  else showResult('❌', '抓取失败', detail);
   loadProducts();   // 后台刷新库存
 }
 
@@ -322,6 +397,58 @@ function showResult(icon, title, html){
   showState('result');
 }
 
+let RATING_ORDER = null, RATING_BUSY = false, RATING_SELECTED = 0;
+function setRatingStars(score){
+  document.querySelectorAll('.star-rating button').forEach(star=>{
+    const selected = Number(star.dataset.score) <= score;
+    star.classList.toggle('selected', selected);
+    star.setAttribute('aria-checked', Number(star.dataset.score) === score ? 'true' : 'false');
+  });
+}
+function previewRatingStars(score){
+  if(!RATING_BUSY) setRatingStars(score);
+}
+function restoreRatingStars(){
+  setRatingStars(RATING_SELECTED);
+}
+function showRating(oid, detailHtml){
+  RATING_ORDER = oid;
+  RATING_BUSY = false;
+  RATING_SELECTED = 0;
+  setRatingStars(0);
+  document.getElementById('ratingDetail').innerHTML = detailHtml || '';
+  document.getElementById('ratingStatus').textContent = '请选择 1～5 星';
+  document.querySelectorAll('.star-rating button').forEach(star=>star.disabled=false);
+  showState('rating');
+}
+async function submitRating(score){
+  if(!RATING_ORDER || RATING_BUSY) return;
+  const previousScore = RATING_SELECTED;
+  RATING_BUSY = true;
+  RATING_SELECTED = score;
+  setRatingStars(score);
+  const stars = document.querySelectorAll('.star-rating button');
+  stars.forEach(star=>star.disabled=true);
+  document.getElementById('ratingStatus').textContent = '正在提交…';
+  let d;
+  try{ d = await (await fetch('/api/order/rating', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({order_id:RATING_ORDER, rating:score})})).json(); }
+  catch(e){ d = {ok:false, msg:'网络错误'}; }
+  RATING_BUSY = false;
+  stars.forEach(star=>star.disabled=false);
+  if(!d.ok){
+    RATING_SELECTED = previousScore;
+    setRatingStars(RATING_SELECTED);
+    document.getElementById('ratingStatus').textContent = d.msg || '评分失败，请重试';
+    return;
+  }
+  RATING_SELECTED = d.rating;
+  setRatingStars(RATING_SELECTED);
+  toast(`已提交 ${d.rating} 星评价，感谢反馈！`);
+  closeItem();
+}
+
 function pollOrder(oid){
   stopWait();
   WAIT_ORDER = oid;
@@ -334,15 +461,16 @@ function pollOrder(oid){
       stopWait(); IN_PICKUP = false;
       showResult('⚠️', '订单已结束', ''); return;
     }
-    if(!d || !d.settled) return;               // 仍在等待完成（服务器 120s 会自动结算兜底）
+    if(!d || !d.settled) return;               // 仍在等待完成（服务器会按配置的超时自动结算兜底）
     stopWait(); IN_PICKUP = false;
     if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
     const a = d.arm || {};
     const ok = d.order_status === 'success', part = d.order_status === 'partial';
-    showResult(ok?'✅':(part?'⚠️':'❌'), ok?'取货完成':(part?'部分完成':'取货失败'),
-      (a.exec ? `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` : '') +
+    const detail = (a.exec ? `🦾 机械臂执行 <b>${a.exec}</b> 次（成功 ${a.success} · 失败 ${a.fail}）<br>` : '') +
       (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
-                : '本次未扣款') + '<br>感谢惠顾，机器人已完成 🦾');
+                : '本次未扣款');
+    if(ok || part) showRating(oid, detail);
+    else showResult('❌', '取货失败', detail);
     loadProducts();
   }, 2000);
 }
@@ -351,25 +479,63 @@ function pollOrder(oid){
 async function confirmPickup(){
   if(!WAIT_ORDER) return;
   const oid = WAIT_ORDER;
-  const btn = document.querySelector('#mGrabActions .btn');
+  const btn = document.getElementById('pickupConfirmBtn');
+  const failBtn = document.getElementById('pickupFailBtn');
   if(btn){ btn.disabled = true; btn.textContent = '结算中…'; }
+  if(failBtn) failBtn.disabled = true;
   stopWait();
   let d;
   try{ d = await (await fetch('/api/order/confirm', {method:'POST',
     headers:{'Content-Type':'application/json'}, body: JSON.stringify({order_id: oid})})).json(); }
   catch(e){ d = {ok:false, msg:'网络错误'}; }
   if(btn){ btn.disabled = false; btn.textContent = '✅ 确定取走'; }
+  if(failBtn) failBtn.disabled = false;
   if(!d.ok){ toast(d.msg||'确认失败', 'err'); pollOrder(oid); return; }   // 失败则继续等
   IN_PICKUP = false;
   if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
-  showResult('✅', '取货完成',
-    (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
-              : '本次未扣款') + '<br>感谢惠顾，机器人已收回 🦾');
+  const detail = d.paid>0
+    ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>，余额 ☾${(d.coins||0).toFixed(0)}`
+    : '本次未扣款';
+  if(!d.order_status || d.order_status === 'success' || d.order_status === 'partial'){
+    showRating(oid, detail);
+  }else{
+    showResult('❌', '取货失败', detail);
+  }
+  loadProducts();
+}
+
+// 顾客确认机械臂未取到货：按零交付结束订单，不扣款、不扣库存
+async function reportPickupFailure(){
+  if(!WAIT_ORDER) return;
+  const oid = WAIT_ORDER;
+  const btn = document.getElementById('pickupFailBtn');
+  const confirmBtn = document.getElementById('pickupConfirmBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '提交中…'; }
+  if(confirmBtn) confirmBtn.disabled = true;
+  stopWait();
+  let d;
+  try{ d = await (await fetch('/api/order/fail', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({order_id: oid})})).json(); }
+  catch(e){ d = {ok:false, msg:'网络错误'}; }
+  if(btn){ btn.disabled = false; btn.textContent = '❌ 抓取失败'; }
+  if(confirmBtn) confirmBtn.disabled = false;
+  if(!d.ok){ toast(d.msg||'提交失败', 'err'); pollOrder(oid); return; }
+  IN_PICKUP = false;
+  RATING_ORDER = null;
+  if(typeof d.coins === 'number'){ USER.coins = d.coins; updateWallet(); }
+  if(d.order_status && d.order_status !== 'failed'){
+    showResult('ℹ️', '订单已结算',
+      `订单状态：${d.order_status}<br>` +
+      (d.paid>0 ? `已扣 <b class="coin">☾${(d.paid||0).toFixed(0)}</b>` : '本次未扣款'));
+  }else{
+    showResult('❌', '抓取失败', '本次未扣款，库存未扣减<br>订单任务已结束');
+  }
   loadProducts();
 }
 
 function closeItem(){
   if(BUSY || IN_PICKUP) return;   // 等待 agent 完成期间不允许关闭弹窗
+  RATING_ORDER = null;
   MODAL_ID = null;
   document.getElementById('modalMask').classList.add('hidden');
   showState('confirm');

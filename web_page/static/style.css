@@ -56,6 +56,17 @@ a{color:var(--blue);text-decoration:none}
 .topbar .links{display:flex;align-items:center;gap:14px;font-size:14px}
 .topbar .links a{color:var(--muted);font-weight:600;transition:color .15s}
 .topbar .links a:hover{color:var(--blue)}
+.topbar .links a.inventory-link{
+  display:inline-flex;align-items:center;gap:5px;background:#fff;color:var(--blue);
+  border:1px solid var(--blue-tint);padding:8px 14px;border-radius:22px;
+  box-shadow:0 6px 16px rgba(31,82,230,.09);
+}
+.topbar .links a.inventory-link:hover{border-color:var(--blue);background:var(--blue-soft)}
+.nav-button{
+  border:0;background:transparent;color:var(--muted);font:inherit;font-weight:600;
+  cursor:pointer;padding:0;
+}
+.nav-button:hover{color:var(--blue)}
 .topbar .links a.agentloop{
   background:linear-gradient(135deg,#4f86ff,var(--blue));
   color:#fff;font-weight:700;padding:8px 15px;border-radius:22px;
@@ -87,6 +98,10 @@ a{color:var(--blue);text-decoration:none}
   color:#7a5a00;border:1px solid #ffe08a;
   border-radius:14px;padding:12px 15px;font-size:13px;margin-bottom:20px;line-height:1.6;
 }
+.admin-login-error{
+  margin-top:12px;padding:10px 12px;border-radius:10px;
+  background:#fff1f2;border:1px solid #fecdd3;color:#be123c;font-size:13px;font-weight:700;
+}
 input,select{
   width:100%;padding:13px 15px;background:var(--panel2);
   border:1px solid var(--line);border-radius:13px;color:var(--text);
@@ -108,6 +123,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 .btn:active{transform:scale(.98)}
 .btn.ghost{background:#fff;border:1.5px solid var(--blue-tint);color:var(--blue);box-shadow:none}
 .btn.ghost:hover{border-color:var(--blue);background:var(--blue-soft)}
+.btn.warning{background:linear-gradient(135deg,#fb923c,#f97316);box-shadow:0 10px 22px rgba(249,115,22,.24)}
+.btn.warning:hover{box-shadow:0 12px 26px rgba(249,115,22,.30)}
 .btn.sm{width:auto;padding:8px 14px;font-size:13px;border-radius:11px}
 
 /* 商品栅格 */
@@ -128,7 +145,8 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 }
 .card .emoji.img{padding:0;background:none}
 .card .emoji.img img{width:100%;height:130px;object-fit:cover;border-radius:14px;display:block}
-.card .name{font-weight:700;font-size:15px}
+.card .emoji.img img.product-contain{object-fit:contain;background:#fff}
+.card .name{font-weight:700;font-size:15px;min-height:42px;display:flex;align-items:center}
 .card .row{display:flex;align-items:center;justify-content:space-between}
 .card .price{
   display:inline-block;background:var(--blue);color:#fff;
@@ -151,6 +169,7 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 .card[onclick]:active{transform:scale(.98)}
 .card .tap{font-size:13px;color:var(--blue);font-weight:700}
 .card .incart{font-size:12px;color:var(--green);font-weight:700}
+.card .sold-out{margin-left:auto;font-size:13px;font-weight:700}
 
 /* 点击商品确认弹窗 */
 .modal-mask{
@@ -168,6 +187,10 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 @keyframes pop{from{transform:scale(.9);opacity:0}to{transform:scale(1);opacity:1}}
 .modal .m-emoji{font-size:56px;line-height:1;margin-bottom:8px}
 .modal .m-title{font-size:14px;color:var(--muted)}
+.queue-notice{
+  margin:12px 0;padding:11px 12px;border:1px solid #f7c948;border-radius:12px;
+  background:#fff8db;color:#8a5a00;font-size:14px;font-weight:700;line-height:1.5;
+}
 .modal .m-name{font-size:22px;font-weight:800;margin:6px 0 4px}
 .modal .m-price{font-size:15px;color:var(--muted)}
 .modal .m-price b{color:var(--blue)}
@@ -180,6 +203,18 @@ label{display:block;font-size:13px;color:var(--muted);margin:14px 0 7px}
 .modal .r-detail{font-size:14px;color:var(--muted);line-height:1.8;margin:10px 0 20px}
 .modal .r-detail b{color:var(--text)}
 .modal .r-detail .coin{color:var(--blue)}
+.modal .rating-detail{font-size:14px;color:var(--muted);line-height:1.7;margin:14px 0 4px}
+.modal .rating-detail b{color:var(--text)}
+.star-rating{display:flex;justify-content:center;gap:5px;margin:18px 0 10px}
+.star-rating button{
+  width:auto;background:transparent;border:0;padding:2px;color:#d6dbea;
+  font-size:44px;line-height:1;cursor:pointer;box-shadow:none;
+  transition:color .15s,transform .12s;
+}
+.star-rating button:hover{transform:scale(1.12);color:#fbbf24}
+.star-rating button.selected{color:#f59e0b}
+.star-rating button:disabled{cursor:wait;opacity:.8}
+.rating-status{min-height:22px;margin-bottom:16px;color:var(--muted);font-size:14px;font-weight:700}
 /* 机械臂抓取中动画 */
 .arm-anim{display:inline-block;animation:grab 1s ease-in-out infinite}
 @keyframes grab{
@@ -293,6 +328,11 @@ body{-webkit-text-size-adjust:100%}   /* 禁止 iOS 自动放大字号导致错�
 
 @media(max-width:380px){
   .brand small{display:none}          /* 极窄屏隐藏副标题，品牌只留一行 */
+  .topbar{padding:10px 12px;gap:8px}
+  .brand{font-size:16px;gap:6px}
+  .brand .logo{width:48px;height:34px}
+  .topbar .links{gap:7px;font-size:12px}
+  .topbar .links a.inventory-link{padding:7px 9px}
   .grid{gap:8px}
   .card{padding:10px}
   .stats-grid{grid-template-columns:1fr}

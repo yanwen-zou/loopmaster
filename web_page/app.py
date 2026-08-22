@@ -14,17 +14,23 @@ import os
 import re
 import ast
 import glob
+import hmac
 import json
 import time
 import random
+import secrets
 import sqlite3
+from functools import wraps
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, request, jsonify, render_template, g, send_file
+from flask import (
+    Flask, request, jsonify, render_template, g, send_file,
+    redirect, session, url_for,
+)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "vending.db")
-BACKUP_DIR = os.path.join(BASE_DIR, "backup")
+DB_PATH = os.environ.get("LOOPMASTER_DB_PATH", os.path.join(BASE_DIR, "vending.db"))
+BACKUP_DIR = os.environ.get("LOOPMASTER_BACKUP_DIR", os.path.join(BASE_DIR, "backup"))
 
 # LoopViz 数据源（只读扫描 loopmaster 产物，不修改其代码）
 LOOP_REPO = Path(BASE_DIR).parent
@@ -40,6 +46,7 @@ ARM_SIMULATE = os.environ.get("ARM_SIMULATE", "1").strip().lower() not in ("0", 
 ARM_SUCCESS_RATE = 0.90      # 单次抓取成功率
 ARM_MAX_RETRY = 2            # 单个货品最多尝试次数
 NEW_USER_COINS = 200.0       # 新用户赠送月亮币
+ADMIN_PASSWORD = os.environ.get("LOOPMASTER_ADMIN_PASSWORD", "loopmaster")
 
 # 开放给 agent 框架的写接口令牌。秘钥只从代码外部读取，源码里不出现明文。
 # 优先级：环境变量 LOOPMASTER_API_TOKEN  >  同目录 api_token.txt（已 gitignore）。
@@ -62,6 +69,10 @@ if not API_TOKEN:
           "写接口当前无鉴权，请在服务器上设置！", flush=True)
 
 app = Flask(__name__)
+app.secret_key = os.environ.get(
+    "LOOPMASTER_SESSION_SECRET"
+) or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax")
 # 静态文件（CSS/JS）不长期缓存：改了样式浏览器会重新拉取，避免旧样式卡住布局
 app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 
@@ -71,8 +82,15 @@ app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0
 # 字段顺序：(中文名, 英文名 name_en, 分类, 售价, 库存, emoji)
 # 字段顺序：(中文名, 英文名 name_en, 分类, 售价, 库存, emoji, 图片文件名@static/assets/)
 SEED_PRODUCTS = [
-    ("农夫山泉矿泉水", "bottled_water",  "饮料",   2.0, 30, "💧", "bottled_water.jpg"),
-    ("纯牛奶",        "milk",           "饮料",   5.0, 15, "🥛", "milk.jpg"),
+    ("可口可乐",      "cola",           "饮料",   3.0, 20, "🥤", "cola.jpg"),
+    ("易拉罐装红牛",  "red_bull",       "饮料",   6.0, 15, "🐂", "red_bull.jpg"),
+    ("农夫山泉饮料", "nongfu", "饮料", 2.0, 100, "💧", "bottled_water_upright_white_v2.png"),
+    ("纯牛奶",        "milk",           "饮料",   5.0, 0,  "🥛", "milk_upright_white_v2.png"),
+    ("LoopMaster 矿泉水", "loopmaster_water", "饮料", 2.0, 100, "💧", "loopmaster_water_upright_white_v2.png"),
+    ("怡宝矿泉水 350mL", "cestbon_water", "饮料", 2.0, 100, "💧", "cestbon_water_product.jpg"),
+    ("AD钙牛奶",      "ad_calcium_milk", "饮料",  3.0, 100, "🥛", "ad_calcium_milk_upright_white_v2.png"),
+    ("东方树叶茉莉花茶 500mL", "oriental_leaf_jasmine_tea", "饮料", 5.0, 100, "🍵", "oriental_leaf_jasmine_tea_product_v1.png"),
+    ("名仁无汽苏打水 375mL", "mingren_soda_water", "饮料", 3.0, 100, "🫧", "mingren_soda_water_product_v1.png"),
     ("双汇火腿肠",    "ham_sausage",    "零食",   2.0, 25, "🌭", "ham_sausage.jpg"),
     ("干脆面",        "cracker_noodle", "零食",   3.0, 20, "🍜", "cracker_noodle.jpg"),
     ("旺仔小馒头",    "wangzai_bun",    "零食",   4.0, 18, "🍘", "wangzai_bun.jpg"),
@@ -80,16 +98,60 @@ SEED_PRODUCTS = [
     ("芝士夹心饼干",  "cheese_biscuit", "零食",   5.0, 18, "🧀", "cheese_biscuit.jpg"),
     ("巧克力棒",      "chocolate_bar",  "零食",   6.0, 15, "🍫", "chocolate_bar.jpg"),
     ("麻辣王子辣条",  "spicy_gluten_strip", "零食", 3.0, 20, "🌶️", "麻辣王子辣条.jpg"),
-    ("LoopMaster 矿泉水", "loopmaster_water", "饮料", 2.0, 30, "💧", "矿泉水.jpg"),
-    ("AD钙牛奶",      "ad_calcium_milk", "饮料",  3.0, 20, "🥛", "AD钙牛奶.jpg"),
-    ("蛋糕面包",      "cake_bread",     "零食",   4.0, 18, "🍰", "蛋糕面包.jpg"),
-    ("奥利奥饼干",    "oreo_cookie",    "零食",   5.0, 20, "🍪", "奥利奥饼干.jpg"),
-    ("自定义",        "custom",         "自定义", 0.0, 99, "✨", ""),
+    ("蛋糕面包",      "cake_bread",      "零食",   4.0, 18, "🍰", "蛋糕面包.jpg"),
+    ("奥利奥饼干",    "oreo_cookie",     "零食",   5.0, 20, "🍪", "奥利奥饼干.jpg"),
+    ("小包纸巾",      "tissue",          "日用品", 1.0, 30, "🧻", "小包纸巾.jpg"),
+    ("自定义商品",    "custom",         "自定义", 0.0, 100, "✨", ""),
 ]
-# 已从货架下架的 SKU。启动时同步清理旧数据库，避免只改种子数据后仍继续展示。
-RETIRED_PRODUCT_SKUS = ("cola", "red_bull")
 # 分类中英映射（发给 agent / 存英文用）
-CATEGORY_EN = {"饮料": "drink", "零食": "snack", "自定义": "custom"}
+CATEGORY_EN = {"饮料": "drink", "零食": "snack", "日用品": "daily_necessity", "自定义": "custom"}
+
+# 视觉提示先写独有的瓶型、瓶盖、标签主色和图案，再明确排除其他饮料。
+# 品牌文字只作为辅助特征，避免 Qwen 在多个透明水瓶之间只按通用名称猜测。
+PRODUCT_VISION_PROMPTS = {
+    "nongfu": (
+        "ONLY the short clear 380 mL bottle with a bright red cap and a wraparound label whose lower "
+        "half is solid red and upper half is white with a green mountain logo. Reject every white-cap, "
+        "green-cap, or blue-cap bottle and reject green, cyan, or plain-white labels"
+    ),
+    "cestbon_water": (
+        "Find exactly one target: the short, squat 350 mL water bottle dominated by a DARK EMERALD-GREEN "
+        "wraparound label. Its label color pattern is a dark emerald-green background with large bright-white "
+        "Chinese characters '怡宝' inside a bright-white curved wave border. The clear bottle has heavily "
+        "sculpted ribbed shoulders. DO NOT select a bottle with a plain-white label, any black-and-purple label "
+        "graphics, the word 'LoopMaster', or an infinity robot logo. Return no target unless the dark-green-and-white "
+        "怡宝 label color pattern is visible"
+    ),
+    "oriental_leaf_jasmine_tea": (
+        "ONLY the tall rectangular bottle filled with obvious golden-yellow tea, with a translucent cap, "
+        "dark-green neck band, and a long cream front panel showing a blue butterfly and white jasmine "
+        "flower. Reject all colorless clear-water bottles and every opaque white bottle"
+    ),
+    "mingren_soda_water": (
+        "ONLY the short wide clear 375 mL bottle with square shoulders, a sky-blue cap, and a large "
+        "light-cyan label containing a rectangular waterfall photograph. Reject every red-cap, white-cap, "
+        "or green-cap bottle and reject labels without the waterfall picture"
+    ),
+    "loopmaster_water": (
+        "Find exactly one target: the tall, slender, smooth straight-sided water bottle dominated by a large "
+        "PLAIN-WHITE rectangular label. Its label color pattern is a solid white background with a BLACK-and-PURPLE "
+        "infinity-shaped robot face and black-and-purple 'LoopMaster' lettering. DO NOT select a bottle with any "
+        "dark emerald-green label area, a green-and-white wave design, the Chinese characters '怡宝', or heavily "
+        "sculpted ribbed shoulders. Return no target unless the white, black, and purple LoopMaster label color "
+        "pattern is visible"
+    ),
+    "ad_calcium_milk": (
+        "ONLY the opaque white 220 g yogurt-style bottle with a narrow neck, silver foil cap, bright-green "
+        "label panel, and one oversized red A beside an oversized green D. Reject every transparent bottle, "
+        "golden tea bottle, and white milk bottle without the large red-and-green AD letters"
+    ),
+    "milk": (
+        "ONLY the opaque ivory 250 mL milk bottle with a wide white cap, rounded shoulders, large metallic-gold "
+        "Chinese characters, and a dark-green cartoon cow surrounding the white number 0.09. Reject transparent "
+        "water bottles and reject the narrow-neck bottle with oversized red-and-green AD letters"
+    ),
+    "loopmaster_tissue_pack": "flat rectangular white plastic-wrapped pocket tissue packet",
+}
 
 
 def slug_en(name, fallback="item"):
@@ -156,6 +218,7 @@ def init_db():
 
         CREATE TABLE IF NOT EXISTS orders (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            request_id TEXT,
             user_id TEXT NOT NULL,
             ip TEXT,
             items TEXT NOT NULL,          -- JSON: [{id,name,price,qty,delivered}]
@@ -163,6 +226,7 @@ def init_db():
             arm_exec INTEGER DEFAULT 0,
             arm_success INTEGER DEFAULT 0,
             arm_fail INTEGER DEFAULT 0,
+            rating INTEGER,                 -- 顾客评价：1~5 星，未评价为 NULL
             status TEXT NOT NULL,         -- success / partial / failed
             created_at TEXT NOT NULL
         );
@@ -204,6 +268,21 @@ def init_db():
     # 初始化统计计数器
     for k in ("page_visits", "arm_exec", "arm_success", "arm_fail", "pickup_flag"):
         db.execute("INSERT OR IGNORE INTO stats(key, value) VALUES(?, 0)", (k,))
+    # 首次启用自动演示时从当前时刻开始计算空闲时间，避免部署后立即误触发。
+    db.execute(
+        "INSERT OR IGNORE INTO stats(key, value) VALUES(?, ?)",
+        ("last_customer_activity_epoch", time.time()),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO stats(key, value) VALUES(?, 1)",
+        ("auto_demo_enabled",),
+    )
+    db.execute(
+        "INSERT OR IGNORE INTO stats(key, value) VALUES(?, ?)",
+        ("auto_demo_next_interval_seconds", random.randint(
+            AUTO_DEMO_MIN_IDLE_SECONDS, AUTO_DEMO_MAX_IDLE_SECONDS
+        )),
+    )
 
     # 老库迁移：给已存在的 products 表补 name_en / image 列（CREATE TABLE IF NOT EXISTS 不改旧表）
     cols = [r[1] for r in db.execute("PRAGMA table_info(products)").fetchall()]
@@ -212,9 +291,19 @@ def init_db():
     if "image" not in cols:
         db.execute("ALTER TABLE products ADD COLUMN image TEXT NOT NULL DEFAULT ''")
 
-    db.executemany(
-        "DELETE FROM products WHERE name_en = ?",
-        [(sku,) for sku in RETIRED_PRODUCT_SKUS],
+    order_cols = [r[1] for r in db.execute("PRAGMA table_info(orders)").fetchall()]
+    if "rating" not in order_cols:
+        db.execute("ALTER TABLE orders ADD COLUMN rating INTEGER")
+    if "request_id" not in order_cols:
+        db.execute("ALTER TABLE orders ADD COLUMN request_id TEXT")
+    db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_request_id "
+        "ON orders(request_id) WHERE request_id IS NOT NULL AND request_id != ''"
+    )
+
+    # 旧 SKU 过于泛化；保留商品 ID、库存和历史关联，只把英文标签迁移为明确品牌名。
+    db.execute(
+        "UPDATE products SET name_en = 'nongfu' WHERE name_en = 'bottled_water'"
     )
 
     # 增量同步种子商品：只补充缺失 SKU，并为旧商品补图，保留实时库存、商品 ID 和后台新增商品。
@@ -231,6 +320,28 @@ def init_db():
     db.executemany(
         "UPDATE products SET image = ? WHERE name_en = ? AND COALESCE(image, '') = ''",
         [(img, en) for (_n, en, _c, _p, _s, _e, img) in SEED_PRODUCTS if img],
+    )
+    # 顾客端商品图片统一使用白底，不以红/绿卡片样式区分商品。
+    db.executemany(
+        "UPDATE products SET image = ? WHERE name_en = ?",
+        [
+            ("bottled_water_upright_white_v2.png", "nongfu"),
+            ("milk_upright_white_v2.png", "milk"),
+            ("loopmaster_water_upright_white_v2.png", "loopmaster_water"),
+            ("cestbon_water_product.jpg", "cestbon_water"),
+            ("ad_calcium_milk_upright_white_v2.png", "ad_calcium_milk"),
+            ("小包纸巾.jpg", "tissue"),
+        ],
+    )
+    # 顾客端名称不展示颜色；颜色仅写入发给机器人/Qwen 的英文视觉提示。
+    db.execute(
+        "UPDATE products SET name = ?, category = ?, image = ? WHERE name_en = ?",
+        (
+            "农夫山泉饮料",
+            "饮料",
+            "bottled_water_upright_white_v2.png",
+            "nongfu",
+        ),
     )
     db.commit()
     db.close()
@@ -268,13 +379,205 @@ def set_stat(db, key, value):
     db.execute("INSERT OR REPLACE INTO stats(key, value) VALUES(?, ?)", (key, value))
 
 
-PICKUP_TIMEOUT = 120   # 下单后最长等待取走秒数，超时自动结算并收回
-BUSY_TIMEOUT = 60      # 单台机器人「忙碌锁」超时秒数：任务卡在 pending/running 超过此值即视为失效并释放
+PICKUP_TIMEOUT = max(30, int(os.environ.get("LOOPMASTER_PICKUP_TIMEOUT", "100")))
+# 忙碌锁不得早于取货超时释放；默认留出额外时间给 agent 上报与网络抖动。
+BUSY_TIMEOUT = max(
+    PICKUP_TIMEOUT,
+    int(os.environ.get("LOOPMASTER_BUSY_TIMEOUT", "180")),
+)
+AUTO_DEMO_ENABLED = os.environ.get("LOOPMASTER_AUTO_DEMO_ENABLED", "0").strip().lower() in (
+    "1", "true", "yes", "on",
+)
+AUTO_DEMO_MIN_IDLE_SECONDS = max(
+    60,
+    int(os.environ.get("LOOPMASTER_AUTO_DEMO_MIN_IDLE_SECONDS", "300")),
+)
+AUTO_DEMO_MAX_IDLE_SECONDS = max(
+    AUTO_DEMO_MIN_IDLE_SECONDS,
+    int(os.environ.get(
+        "LOOPMASTER_AUTO_DEMO_MAX_IDLE_SECONDS",
+        os.environ.get("LOOPMASTER_AUTO_DEMO_IDLE_SECONDS", "600"),
+    )),
+)
+# 保留旧常量名供已有调用兼容；实际每轮使用持久化的 5~10 分钟随机值。
+AUTO_DEMO_IDLE_SECONDS = AUTO_DEMO_MAX_IDLE_SECONDS
+AUTO_DEMO_USER_ID = "__exhibition_auto_demo__"
+DEMO_TRAJECTORY_USER_ID = "__admin_trajectory_demo__"
+
+
+def _trajectory_episode_count():
+    """Return the number of checked-in cached trajectories available to the robot."""
+    info_path = LOOP_REPO / "loopmaster_agentic" / "config" / "record_traj" / "meta" / "info.json"
+    try:
+        info = json.loads(info_path.read_text(encoding="utf-8"))
+        return max(0, int(info.get("total_episodes") or 0))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return 0
 
 
 def stat_val(db, key):
     row = db.execute("SELECT value FROM stats WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else 0
+
+
+def _new_auto_demo_interval():
+    return random.randint(AUTO_DEMO_MIN_IDLE_SECONDS, AUTO_DEMO_MAX_IDLE_SECONDS)
+
+
+def _auto_demo_interval(db):
+    value = int(stat_val(db, "auto_demo_next_interval_seconds") or 0)
+    if value < AUTO_DEMO_MIN_IDLE_SECONDS or value > AUTO_DEMO_MAX_IDLE_SECONDS:
+        value = _new_auto_demo_interval()
+        set_stat(db, "auto_demo_next_interval_seconds", value)
+    return value
+
+
+def record_customer_activity(db, epoch=None, *, randomize_interval=True):
+    """记录扫码打开、登录或下单活动，用于推迟无人值守的展会自动演示。"""
+    set_stat(db, "last_customer_activity_epoch", float(epoch or time.time()))
+    if randomize_interval:
+        set_stat(db, "auto_demo_next_interval_seconds", _new_auto_demo_interval())
+
+
+def _timestamp_epoch(value):
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S").timestamp()
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _latest_activity_epoch(db):
+    last_activity = float(stat_val(db, "last_customer_activity_epoch") or 0)
+    latest_order = db.execute(
+        "SELECT created_at FROM orders ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    if latest_order:
+        last_activity = max(last_activity, _timestamp_epoch(latest_order["created_at"]))
+    return last_activity
+
+
+def maybe_create_auto_demo_order(
+    *, now_epoch=None, idle_seconds=None, force=False, trigger_now=False, chooser=None
+):
+    """空闲达到阈值且机器人无任务时，原子地创建一笔随机饮料演示订单。"""
+    if not (AUTO_DEMO_ENABLED or force):
+        return {"created": False, "reason": "disabled"}
+
+    now_epoch = float(now_epoch or time.time())
+    choose_product = chooser or random.choice
+    db = sqlite3.connect(DB_PATH, timeout=15)
+    db.row_factory = sqlite3.Row
+    try:
+        # Gunicorn 多 worker 或定时器重叠时，只允许一个进程完成检查和建单。
+        db.execute("BEGIN IMMEDIATE")
+        if not trigger_now and not bool(int(stat_val(db, "auto_demo_enabled") or 0)):
+            db.rollback()
+            return {"created": False, "reason": "admin_disabled"}
+        target_idle_seconds = (
+            int(idle_seconds) if idle_seconds is not None else _auto_demo_interval(db)
+        )
+        last_activity = _latest_activity_epoch(db)
+        idle_for = max(0, int(now_epoch - last_activity))
+        if not trigger_now and idle_for < target_idle_seconds:
+            db.rollback()
+            return {
+                "created": False,
+                "reason": "not_idle",
+                "idle_for": idle_for,
+                "remaining": target_idle_seconds - idle_for,
+                "target_idle_seconds": target_idle_seconds,
+            }
+
+        busy = db.execute(
+            "SELECT id FROM tasks WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+        ).fetchone()
+        if busy:
+            db.rollback()
+            return {"created": False, "reason": "robot_busy", "task_id": busy["id"]}
+
+        products = db.execute(
+            "SELECT * FROM products "
+            "WHERE category = '饮料' AND stock > 0 AND name_en <> 'custom' ORDER BY id"
+        ).fetchall()
+        if not products:
+            db.rollback()
+            return {"created": False, "reason": "no_available_drinks"}
+        product = choose_product(products)
+
+        created_at = datetime.fromtimestamp(now_epoch).strftime("%Y-%m-%d %H:%M:%S")
+        db.execute(
+            "INSERT OR IGNORE INTO users(id, ip, coins, visits, created_at, last_seen) "
+            "VALUES(?,?,?,?,?,?)",
+            (AUTO_DEMO_USER_ID, "auto-demo", 100000.0, 0, created_at, created_at),
+        )
+        db.execute(
+            "UPDATE users SET coins = MAX(coins, 100000), last_seen = ? WHERE id = ?",
+            (created_at, AUTO_DEMO_USER_ID),
+        )
+
+        sku = product["name_en"] or slug_en(product["name"])
+        line_item = {
+            "id": product["id"], "name": product["name"], "name_en": sku,
+            "category": product["category"], "price": product["price"],
+            "emoji": product["emoji"], "qty": 1, "delivered": 0,
+        }
+        agent_item = {
+            "id": product["id"], "sku": sku, "name": sku,
+            "category": CATEGORY_EN.get(product["category"], "drink"),
+            "price": product["price"], "qty": 1,
+        }
+        vision_prompt = PRODUCT_VISION_PROMPTS.get(sku)
+        if vision_prompt:
+            agent_item["vision_prompt"] = vision_prompt
+        instruction = f"pick {sku} x1 deliver_to_customer"
+        if vision_prompt:
+            instruction += f" visual_target={json.dumps(vision_prompt)}"
+
+        db.execute(
+            """INSERT INTO orders(user_id, ip, items, total, arm_exec, arm_success,
+               arm_fail, status, created_at) VALUES(?,?,?,?,0,0,0,?,?)""",
+            (
+                AUTO_DEMO_USER_ID, "auto-demo",
+                json.dumps([line_item], ensure_ascii=False), 0.0, "pending", created_at,
+            ),
+        )
+        order_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
+        db.execute(
+            """INSERT INTO tasks(order_id, user_id, instruction, payload, status, created_at)
+               VALUES(?,?,?,?,?,?)""",
+            (
+                order_id, AUTO_DEMO_USER_ID, instruction,
+                json.dumps([agent_item], ensure_ascii=False), "pending", created_at,
+            ),
+        )
+        task_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
+        set_stat(db, "pickup_flag", 1)
+        next_interval = _new_auto_demo_interval()
+        set_stat(db, "auto_demo_next_interval_seconds", next_interval)
+        db.commit()
+        return {
+            "created": True, "order_id": order_id, "task_id": task_id,
+            "product_id": product["id"], "product_name": product["name"],
+            "sku": sku, "idle_for": idle_for, "trigger_now": trigger_now,
+            "next_interval_seconds": next_interval,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def admin_required(view):
+    """库存后台与对应管理接口必须经过管理员密码登录。"""
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if session.get("inventory_admin") is True:
+            return view(*args, **kwargs)
+        if request.path.startswith("/api/"):
+            return jsonify(ok=False, msg="请先登录库存管理系统"), 401
+        return redirect(url_for("admin_login", next=request.full_path.rstrip("?")))
+    return wrapped
 
 
 # ----------------------------- 页面路由 -----------------------------
@@ -283,19 +586,47 @@ def index():
     # 扫码打开主页 = 一次访问
     db = get_db()
     bump_stat(db, "page_visits", 1)
+    record_customer_activity(db)
     db.commit()
     return render_template("index.html")
 
 
 @app.route("/dashboard")
+@admin_required
 def dashboard():
     return render_template("dashboard.html")
 
 
 @app.route("/admin")
+@admin_required
 def admin():
     # 后台已与数据大屏合并为同一页面
     return render_template("dashboard.html")
+
+
+@app.route("/admin/login", methods=["GET", "POST"])
+def admin_login():
+    next_url = request.values.get("next") or url_for("dashboard")
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = url_for("dashboard")
+    if session.get("inventory_admin") is True:
+        return redirect(next_url)
+
+    error = ""
+    if request.method == "POST":
+        password = request.form.get("password", "")
+        if hmac.compare_digest(password, ADMIN_PASSWORD):
+            session.clear()
+            session["inventory_admin"] = True
+            return redirect(next_url)
+        error = "密码错误，请重试"
+    return render_template("admin_login.html", error=error, next_url=next_url)
+
+
+@app.route("/admin/logout", methods=["POST"])
+def admin_logout():
+    session.pop("inventory_admin", None)
+    return redirect(url_for("admin_login"))
 
 
 @app.route("/about")
@@ -333,6 +664,7 @@ def api_login():
             (ip, now_str(), uid),
         )
         coins = user["coins"]
+    record_customer_activity(db)
     db.commit()
     return jsonify(
         ok=True, user_id=uid, ip=ip, coins=coins, is_new=is_new,
@@ -343,8 +675,76 @@ def api_login():
 @app.route("/api/products")
 def api_products():
     db = get_db()
-    rows = db.execute("SELECT * FROM products ORDER BY category DESC, id").fetchall()
+    rows = db.execute(
+        "SELECT * FROM products "
+        "ORDER BY CASE WHEN stock > 0 THEN 0 ELSE 1 END, category DESC, id"
+    ).fetchall()
     return jsonify(ok=True, products=[dict(r) for r in rows])
+
+
+def _supersede_pending_task(db, task):
+    """以零交付结束尚未认领的任务；不扣款、不扣库存、不计机械臂执行次数。"""
+    order = db.execute("SELECT * FROM orders WHERE id=?", (task["order_id"],)).fetchone()
+    result = {
+        "reason": "superseded_by_new_order",
+        "superseded_at": now_str(),
+    }
+    if order and order["status"] == "pending":
+        line_items = json.loads(order["items"] or "[]")
+        for item in line_items:
+            item["delivered"] = 0
+        db.execute(
+            "UPDATE orders SET items=?, total=0, arm_exec=0, arm_success=0, arm_fail=0, status='failed' "
+            "WHERE id=? AND status='pending'",
+            (json.dumps(line_items, ensure_ascii=False), order["id"]),
+        )
+    db.execute(
+        "UPDATE tasks SET status='failed', result=?, finished_at=? WHERE id=? AND status='pending'",
+        (json.dumps(result, ensure_ascii=False), now_str(), task["id"]),
+    )
+    db.execute(
+        """INSERT INTO exec_logs(task_id, order_id, agent_id, ts, instruction, status, code, detail)
+           VALUES(?,?,?,?,?,?,?,?)""",
+        (
+            task["id"], task["order_id"], None, now_str(), task["instruction"],
+            "failed", "SUPERSEDED_BY_NEW_ORDER", json.dumps(result, ensure_ascii=False),
+        ),
+    )
+    return task["id"]
+
+
+def _cancel_active_task(db, task, *, reason="cancelled_by_admin"):
+    """Cancel a pending/running task without charging or changing inventory."""
+    cancelled_at = now_str()
+    result = {"reason": reason, "cancelled_at": cancelled_at}
+    if task["order_id"] is not None:
+        order = db.execute("SELECT * FROM orders WHERE id=?", (task["order_id"],)).fetchone()
+        if order and order["status"] == "pending":
+            line_items = json.loads(order["items"] or "[]")
+            for item in line_items:
+                item["delivered"] = 0
+            db.execute(
+                "UPDATE orders SET items=?, total=0, arm_exec=0, arm_success=0, arm_fail=0, "
+                "status='failed' WHERE id=? AND status='pending'",
+                (json.dumps(line_items, ensure_ascii=False), order["id"]),
+            )
+    updated = db.execute(
+        "UPDATE tasks SET status='failed', result=?, finished_at=? "
+        "WHERE id=? AND status IN ('pending','running')",
+        (json.dumps(result, ensure_ascii=False), cancelled_at, task["id"]),
+    )
+    if updated.rowcount:
+        db.execute(
+            """INSERT INTO exec_logs(task_id, order_id, agent_id, ts, instruction, status, code, detail)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                task["id"], task["order_id"], task["agent_id"], cancelled_at,
+                task["instruction"], "failed", "CANCELLED_BY_ADMIN",
+                json.dumps(result, ensure_ascii=False),
+            ),
+        )
+        return task["id"]
+    return None
 
 
 @app.route("/api/order", methods=["POST"])
@@ -352,15 +752,47 @@ def api_order():
     data = request.get_json(force=True, silent=True) or {}
     uid = (data.get("user_id") or "").strip()
     cart = data.get("items") or []
+    request_id = (request.headers.get("Idempotency-Key") or data.get("request_id") or "").strip()
     if not uid:
         return jsonify(ok=False, msg="请先登录"), 400
     if not cart:
         return jsonify(ok=False, msg="购物篮为空"), 400
+    if request_id and (len(request_id) > 128 or not re.fullmatch(r"[A-Za-z0-9._:-]+", request_id)):
+        return jsonify(ok=False, msg="下单请求标识无效"), 400
 
     db = get_db()
     user = db.execute("SELECT * FROM users WHERE id = ?", (uid,)).fetchone()
     if not user:
         return jsonify(ok=False, msg="用户不存在，请重新登录"), 400
+    # 即使库存校验或忙碌锁随后拒绝，本次真人操作也应推迟自动演示。
+    record_customer_activity(db)
+    db.commit()
+
+    # 网关可能在订单已写入后返回 502；同一请求重试时返回原订单，避免重复下单。
+    if request_id:
+        existing = db.execute(
+            "SELECT * FROM orders WHERE request_id=? AND user_id=?", (request_id, uid)
+        ).fetchone()
+        if existing:
+            task = db.execute(
+                "SELECT id FROM tasks WHERE order_id=? ORDER BY id DESC LIMIT 1", (existing["id"],)
+            ).fetchone()
+            return jsonify(
+                ok=True,
+                duplicate=True,
+                order_id=existing["id"],
+                task_id=task["id"] if task else None,
+                status=existing["status"],
+                paid=existing["total"],
+                coins=user["coins"],
+                items=json.loads(existing["items"] or "[]"),
+                arm={
+                    "exec": existing["arm_exec"],
+                    "success": existing["arm_success"],
+                    "fail": existing["arm_fail"],
+                },
+                pickup_timeout=PICKUP_TIMEOUT,
+            )
 
     # 校验库存 + 计算应付
     line_items = []
@@ -395,30 +827,40 @@ def api_order():
 
     # ---- 真实机器人模式：建 pending 订单 + task，交给 agent 轮询执行，report 时结算 ----
     if not ARM_SIMULATE:
-        # 现场只有一台机器人：已有未完成任务(待执行/执行中)时，不允许新用户下单
-        busy = db.execute(
+        # 与机器人认领接口争用同一 SQLite 写锁：pending 要么先被新订单替换，要么先被认领为 running。
+        db.execute("BEGIN IMMEDIATE")
+        running = db.execute(
             "SELECT id, order_id, created_at FROM tasks "
-            "WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+            "WHERE status='running' ORDER BY id LIMIT 1"
         ).fetchone()
-        if busy:
-            # 忙碌锁超时兜底：任务卡在 pending/running 超过 BUSY_TIMEOUT 秒(agent 崩溃/未上报)，
+        if running:
+            # running 表示机器人已经认领，不能被新订单抢占；超时后沿用原有兜底释放逻辑。
             # 视为失效——自动结算并释放，避免所有顾客一直卡在「正在为其他顾客点单」。
             try:
                 waited = (datetime.now() - datetime.strptime(
-                    busy["created_at"], "%Y-%m-%d %H:%M:%S")).total_seconds()
+                    running["created_at"], "%Y-%m-%d %H:%M:%S")).total_seconds()
             except (ValueError, TypeError):
                 waited = BUSY_TIMEOUT + 1   # 时间解析异常也视为超时，直接释放
             if waited < BUSY_TIMEOUT:
+                wait_seconds = max(1, int(BUSY_TIMEOUT - waited))
+                db.rollback()
                 return jsonify(ok=False, busy=True,
-                               msg="机器人正在为其他顾客服务，请稍候再下单 🤖"), 409
-            stale = db.execute("SELECT * FROM orders WHERE id=?", (busy["order_id"],)).fetchone()
+                               wait_seconds=wait_seconds,
+                               msg=f"请排队：机器人正在处理前一位顾客的订单，预计最多还需 {wait_seconds} 秒 🤖"), 409
+            stale = db.execute("SELECT * FROM orders WHERE id=?", (running["order_id"],)).fetchone()
             if stale and stale["status"] == "pending":
                 _settle_full(db, stale)   # 结算卡死订单并把任务标记为 done
             else:
                 db.execute("UPDATE tasks SET status='done', finished_at=? "
-                           "WHERE status IN ('pending','running')", (now_str(),))
+                           "WHERE id=? AND status='running'", (now_str(), running["id"]))
                 set_stat(db, "pickup_flag", 0)
-            db.commit()
+
+        pending_tasks = db.execute(
+            "SELECT * FROM tasks WHERE status='pending' ORDER BY id"
+        ).fetchall()
+        superseded_task_ids = [
+            _supersede_pending_task(db, task) for task in pending_tasks
+        ]
         for li in line_items:
             li["delivered"] = 0
         # 网站侧订单快照：保留中文名 + emoji 供大屏/后台展示
@@ -429,18 +871,22 @@ def api_order():
             ai = {"id": li["id"], "sku": li["name_en"], "name": li["name_en"],
                   "category": CATEGORY_EN.get(li.get("category", ""), "snack"),
                   "price": li["price"], "qty": li["qty"]}
+            vision_prompt = PRODUCT_VISION_PROMPTS.get(li["name_en"])
+            if vision_prompt:
+                ai["vision_prompt"] = vision_prompt
             if li.get("note"):
                 ai["note"] = li["note"]   # 自定义需求(自由文本)
             agent_items.append(ai)
         payload_json = json.dumps(agent_items, ensure_ascii=False)
         instruction = "; ".join(
             f"pick {ai['sku']} x{ai['qty']} deliver_to_customer"
+            + (f" visual_target={json.dumps(ai['vision_prompt'])}" if ai.get("vision_prompt") else "")
             + (f" note={ai['note']}" if ai.get("note") else "")
             for ai in agent_items)
         db.execute(
-            """INSERT INTO orders(user_id, ip, items, total, arm_exec, arm_success,
-               arm_fail, status, created_at) VALUES(?,?,?,?,0,0,0,?,?)""",
-            (uid, ip, order_items_json, 0.0, "pending", now_str()),
+            """INSERT INTO orders(request_id, user_id, ip, items, total, arm_exec, arm_success,
+               arm_fail, status, created_at) VALUES(?,?,?,?,?,0,0,0,?,?)""",
+            (request_id or None, uid, ip, order_items_json, 0.0, "pending", now_str()),
         )
         order_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
         db.execute(
@@ -454,6 +900,7 @@ def api_order():
         return jsonify(
             ok=True, order_id=order_id, task_id=task_id, status="pending",
             need_total=need_total, coins=user["coins"], items=line_items,
+            superseded_task_ids=superseded_task_ids,
             pickup_timeout=PICKUP_TIMEOUT,
             msg="机械臂正在为你取货，取走后请点「确定取走」",
         )
@@ -489,9 +936,9 @@ def api_order():
     status = "success" if all_delivered else ("partial" if any_delivered else "failed")
 
     db.execute(
-        """INSERT INTO orders(user_id, ip, items, total, arm_exec, arm_success,
-           arm_fail, status, created_at) VALUES(?,?,?,?,?,?,?,?,?)""",
-        (uid, ip, json.dumps(line_items, ensure_ascii=False), delivered_total,
+        """INSERT INTO orders(request_id, user_id, ip, items, total, arm_exec, arm_success,
+           arm_fail, status, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+        (request_id or None, uid, ip, json.dumps(line_items, ensure_ascii=False), delivered_total,
          arm_exec, arm_ok, arm_bad, status, now_str()),
     )
     bump_stat(db, "arm_exec", arm_exec)
@@ -513,7 +960,7 @@ def api_stats():
     db = get_db()
     orders = db.execute("SELECT COUNT(*) c, COALESCE(SUM(total),0) t FROM orders").fetchone()
     recent = db.execute(
-        "SELECT id, user_id, ip, total, status, arm_exec, arm_success, arm_fail, items, created_at "
+        "SELECT id, user_id, ip, total, status, arm_exec, arm_success, arm_fail, rating, items, created_at "
         "FROM orders ORDER BY id DESC LIMIT 15"
     ).fetchall()
     users_c = db.execute("SELECT COUNT(*) c FROM users").fetchone()["c"]
@@ -533,6 +980,7 @@ def api_stats():
 
 # ------------------ 后台：新增商品 / 补货 / 上报机械臂 ------------------
 @app.route("/api/products", methods=["POST"])
+@admin_required
 def api_add_product():
     data = request.get_json(force=True, silent=True) or {}
     name = (data.get("name") or "").strip()
@@ -543,12 +991,20 @@ def api_add_product():
         stock = int(data.get("stock"))
     except (TypeError, ValueError):
         return jsonify(ok=False, msg="价格/库存格式错误"), 400
+    if price < 0 or stock < 0:
+        return jsonify(ok=False, msg="价格和库存不能为负数"), 400
     category = (data.get("category") or "零食").strip()
+    if category not in CATEGORY_EN:
+        return jsonify(ok=False, msg="商品分类无效"), 400
     emoji = (data.get("emoji") or "📦").strip()
     # agent 用的英文标识：后台没填就按商品名自动 slug（含中文则回退 item）
     name_en = (data.get("name_en") or "").strip().lower() or slug_en(name)
+    if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", name_en):
+        return jsonify(ok=False, msg="English 名只能使用小写字母、数字和下划线"), 400
 
     db = get_db()
+    if db.execute("SELECT 1 FROM products WHERE name_en = ?", (name_en,)).fetchone():
+        return jsonify(ok=False, msg="English 名已存在，请换一个"), 409
     db.execute(
         "INSERT INTO products(name,name_en,category,price,stock,emoji,created_at) "
         "VALUES(?,?,?,?,?,?,?)",
@@ -560,12 +1016,15 @@ def api_add_product():
 
 
 @app.route("/api/products/<int:pid>/restock", methods=["POST"])
+@admin_required
 def api_restock(pid):
     data = request.get_json(force=True, silent=True) or {}
     try:
         add = int(data.get("add"))
     except (TypeError, ValueError):
         return jsonify(ok=False, msg="补货数量错误"), 400
+    if add <= 0:
+        return jsonify(ok=False, msg="补货数量必须大于 0"), 400
     db = get_db()
     p = db.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
     if not p:
@@ -575,7 +1034,187 @@ def api_restock(pid):
     return jsonify(ok=True, stock=p["stock"] + add)
 
 
+@app.route("/api/products/<int:pid>/stock", methods=["POST"])
+@admin_required
+def api_set_stock(pid):
+    """把库存调整为指定数量；设为 0 可临时售罄，但商品仍保留在后台。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        stock = int(data.get("stock"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, msg="库存数量错误"), 400
+    if stock < 0:
+        return jsonify(ok=False, msg="库存不能为负数"), 400
+
+    db = get_db()
+    p = db.execute("SELECT id FROM products WHERE id = ?", (pid,)).fetchone()
+    if not p:
+        return jsonify(ok=False, msg="商品不存在"), 404
+    db.execute("UPDATE products SET stock = ? WHERE id = ?", (stock, pid))
+    db.commit()
+    return jsonify(ok=True, stock=stock)
+
+
+@app.route("/api/auto-demo", methods=["GET", "POST"])
+@admin_required
+def api_auto_demo():
+    """库存后台控制展会空闲自动抓取；重新开启时重新计算完整空闲周期。"""
+    db = get_db()
+    if request.method == "POST":
+        data = request.get_json(force=True, silent=True) or {}
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            return jsonify(ok=False, msg="enabled 必须是布尔值"), 400
+        set_stat(db, "auto_demo_enabled", 1 if enabled else 0)
+        if enabled:
+            record_customer_activity(db)
+        db.commit()
+
+    enabled = bool(int(stat_val(db, "auto_demo_enabled") or 0))
+    next_interval = _auto_demo_interval(db)
+    last_activity = _latest_activity_epoch(db)
+    idle_for = max(0, int(time.time() - last_activity))
+    busy = db.execute(
+        "SELECT id FROM tasks WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+    ).fetchone()
+    last_auto = db.execute(
+        "SELECT t.id AS task_id, t.status, t.created_at, t.finished_at, o.items "
+        "FROM tasks t LEFT JOIN orders o ON o.id = t.order_id "
+        "WHERE t.user_id = ? ORDER BY t.id DESC LIMIT 1",
+        (AUTO_DEMO_USER_ID,),
+    ).fetchone()
+    last_auto_product = ""
+    if last_auto:
+        try:
+            last_items = json.loads(last_auto["items"] or "[]")
+            last_auto_product = last_items[0].get("name", "") if last_items else ""
+        except (TypeError, ValueError, json.JSONDecodeError):
+            pass
+    db.commit()
+    return jsonify(
+        ok=True,
+        enabled=enabled,
+        idle_seconds=next_interval,
+        min_idle_seconds=AUTO_DEMO_MIN_IDLE_SECONDS,
+        max_idle_seconds=AUTO_DEMO_MAX_IDLE_SECONDS,
+        next_interval_seconds=next_interval,
+        idle_for=idle_for,
+        remaining=max(0, next_interval - idle_for),
+        robot_busy=bool(busy),
+        active_task_id=(busy["id"] if busy else None),
+        last_auto_task=(dict(last_auto) if last_auto else None),
+        last_auto_product=last_auto_product,
+    )
+
+
+@app.route("/api/auto-demo/trigger", methods=["POST"])
+@admin_required
+def api_auto_demo_trigger():
+    """库存后台立即随机创建一笔饮料订单；不受自动开关和空闲倒计时限制。"""
+    result = maybe_create_auto_demo_order(force=True, trigger_now=True)
+    if result.get("created"):
+        return jsonify(ok=True, **result)
+    messages = {
+        "robot_busy": "机器人正在执行任务，请完成后再试",
+        "no_available_drinks": "当前没有可随机抓取的在售饮料",
+    }
+    reason = result.get("reason", "unknown")
+    return jsonify(ok=False, msg=messages.get(reason, "暂时无法创建随机抓取任务"), **result), 409
+
+
+@app.route("/api/demo-trajectory")
+@admin_required
+def api_demo_trajectory_status():
+    """库存后台读取当前机器人任务及可直接回放的缓存轨迹。"""
+    db = get_db()
+    active = db.execute(
+        "SELECT id, instruction, status, agent_id, created_at, claimed_at "
+        "FROM tasks WHERE status IN ('pending','running') ORDER BY id LIMIT 1"
+    ).fetchone()
+    count = _trajectory_episode_count()
+    return jsonify(
+        ok=True,
+        episodes=list(range(count)),
+        active_task=dict(active) if active else None,
+    )
+
+
+@app.route("/api/demo-trajectory/cancel", methods=["POST"])
+@admin_required
+def api_demo_trajectory_cancel():
+    """管理员取消所有尚未结束的任务；运行中的 agent 会收到协作式停止信号。"""
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    active = db.execute(
+        "SELECT * FROM tasks WHERE status IN ('pending','running') ORDER BY id"
+    ).fetchall()
+    cancelled = [
+        task_id for task_id in (_cancel_active_task(db, task) for task in active) if task_id is not None
+    ]
+    if cancelled:
+        set_stat(db, "pickup_flag", 0)
+        record_customer_activity(db)
+    db.commit()
+    return jsonify(ok=True, cancelled_task_ids=cancelled)
+
+
+@app.route("/api/demo-trajectory/run", methods=["POST"])
+@admin_required
+def api_demo_trajectory_run():
+    """原子地取消当前任务并排入一个无需视觉/规划的指定缓存轨迹。"""
+    data = request.get_json(force=True, silent=True) or {}
+    try:
+        episode = int(data.get("episode"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, msg="请输入有效的轨迹编号"), 400
+    episode_count = _trajectory_episode_count()
+    if episode_count <= 0:
+        return jsonify(ok=False, msg="服务器未找到可用的缓存轨迹"), 503
+    if not 0 <= episode < episode_count:
+        return jsonify(ok=False, msg=f"轨迹编号必须在 0～{episode_count - 1} 之间"), 400
+
+    db = get_db()
+    db.execute("BEGIN IMMEDIATE")
+    active = db.execute(
+        "SELECT * FROM tasks WHERE status IN ('pending','running') ORDER BY id"
+    ).fetchall()
+    cancelled = [
+        task_id for task_id in (
+            _cancel_active_task(db, task, reason="replaced_by_demo_trajectory") for task in active
+        ) if task_id is not None
+    ]
+    created_at = now_str()
+    db.execute(
+        "INSERT OR IGNORE INTO users(id, ip, coins, visits, created_at, last_seen) "
+        "VALUES(?,?,?,?,?,?)",
+        (DEMO_TRAJECTORY_USER_ID, "admin-demo", 0.0, 0, created_at, created_at),
+    )
+    instruction = f"directly replay cached trajectory episode {episode} for admin demo"
+    payload = [{"type": "demo_trajectory", "episode": episode, "qty": 0}]
+    db.execute(
+        """INSERT INTO tasks(order_id, user_id, instruction, payload, status, created_at)
+           VALUES(?,?,?,?,?,?)""",
+        (
+            None, DEMO_TRAJECTORY_USER_ID, instruction,
+            json.dumps(payload, ensure_ascii=False), "pending", created_at,
+        ),
+    )
+    task_id = db.execute("SELECT last_insert_rowid() AS i").fetchone()["i"]
+    set_stat(db, "pickup_flag", 0)
+    # 手动演示也重置无人值守倒计时，避免轨迹刚结束就被随机抓取插队。
+    record_customer_activity(db)
+    db.commit()
+    return jsonify(
+        ok=True,
+        task_id=task_id,
+        order_id=None,
+        episode=episode,
+        cancelled_task_ids=cancelled,
+    )
+
+
 @app.route("/api/backup", methods=["POST"])
+@admin_required
 def api_backup():
     """后台手动触发一次数据库备份。"""
     dst = snapshot_db()
@@ -586,6 +1225,7 @@ def api_backup():
 
 
 @app.route("/api/backups")
+@admin_required
 def api_backups():
     """列出已有备份。"""
     files = sorted(glob.glob(os.path.join(BACKUP_DIR, "vending_*.db")), reverse=True)
@@ -596,6 +1236,7 @@ def api_backups():
 
 
 @app.route("/api/download-db")
+@admin_required
 def api_download_db():
     """下载当前数据库文件（可离线保存/迁移）。"""
     if not os.path.exists(DB_PATH):
@@ -773,13 +1414,25 @@ def api_task_claim(tid):
     data = request.get_json(force=True, silent=True) or {}
     agent_id = (data.get("agent_id") or "agent").strip()
     db = get_db()
+    db.execute("BEGIN IMMEDIATE")
     r = db.execute("SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()
     if not r:
+        db.rollback()
         return jsonify(ok=False, msg="任务不存在"), 404
-    if r["status"] not in ("pending", "running"):
+    if r["status"] == "running" and r["agent_id"] == agent_id:
+        db.commit()
+        return jsonify(ok=True, already=True, task=dict(r))
+    if r["status"] != "pending":
+        db.rollback()
         return jsonify(ok=False, msg=f"任务状态为 {r['status']}，不可认领"), 409
-    db.execute("UPDATE tasks SET status='running', agent_id=?, claimed_at=? WHERE id=?",
-               (agent_id, now_str(), tid))
+    updated = db.execute(
+        "UPDATE tasks SET status='running', agent_id=?, claimed_at=? "
+        "WHERE id=? AND status='pending'",
+        (agent_id, now_str(), tid),
+    )
+    if updated.rowcount != 1:
+        db.rollback()
+        return jsonify(ok=False, msg="任务已被取消或由其他机器人认领"), 409
     db.commit()
     return jsonify(ok=True, task=dict(db.execute(
         "SELECT * FROM tasks WHERE id=?", (tid,)).fetchone()))
@@ -798,13 +1451,36 @@ def api_task_report(tid):
         return jsonify(ok=False, msg="任务不存在"), 404
     if task["status"] in ("done", "failed"):
         return jsonify(ok=False, msg="任务已结算"), 409
+    reported = (data.get("status") or "").strip()
     order = db.execute("SELECT * FROM orders WHERE id=?", (task["order_id"],)).fetchone()
     if not order:
-        return jsonify(ok=False, msg="关联订单不存在"), 404
+        if task["order_id"] is not None:
+            return jsonify(ok=False, msg="关联订单不存在"), 404
+        # 管理员直放轨迹不是销售订单：只结束任务，不产生订单、扣款或库存变更。
+        task_status = "done" if reported in ("done", "success") else "failed"
+        db.execute(
+            "UPDATE tasks SET status=?, result=?, finished_at=? WHERE id=?",
+            (
+                task_status,
+                json.dumps(data.get("result") or data, ensure_ascii=False),
+                now_str(), tid,
+            ),
+        )
+        set_stat(db, "pickup_flag", 0)
+        db.execute(
+            """INSERT INTO exec_logs(task_id, order_id, agent_id, ts, instruction, status, code, detail)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (
+                tid, None, data.get("agent_id"), now_str(), task["instruction"],
+                task_status, data.get("code"),
+                json.dumps({"arm": data.get("arm") or {}, "demo_trajectory": True}, ensure_ascii=False),
+            ),
+        )
+        db.commit()
+        return jsonify(ok=True, task_status=task_status, paid=0, coins=None, items=[])
 
     # 结算用网站侧订单快照(含中文名/emoji)，payload 是纯英文的 agent 载荷仅供机器人读
     line_items = json.loads(order["items"] or task["payload"] or "[]")
-    reported = (data.get("status") or "").strip()
     # 交付数量：优先取 items 明细；否则 done/success→全交付，其余→全 0
     delivered_map = {}
     if data.get("items"):
@@ -905,13 +1581,75 @@ def api_order_confirm():
         set_stat(db, "pickup_flag", 0)
         db.commit()
         u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
-        return jsonify(ok=True, already=True, paid=order["total"],
+        return jsonify(ok=True, already=True, order_id=oid,
+                       order_status=order["status"], paid=order["total"],
                        coins=(u["coins"] if u else None))
     status, paid = _settle_full(db, order)
     db.commit()
     u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
     return jsonify(ok=True, order_id=oid, order_status=status, paid=paid,
                    coins=(u["coins"] if u else None), msg="已取走，扣款完成，谢谢惠顾")
+
+
+@app.route("/api/order/fail", methods=["POST"])
+def api_order_fail():
+    """顾客确认抓取失败：按零交付结算，不扣款/库存，并结束机器人任务。"""
+    data = request.get_json(force=True, silent=True) or {}
+    oid = data.get("order_id")
+    db = get_db()
+    order = db.execute("SELECT * FROM orders WHERE id=?", (oid,)).fetchone()
+    if not order:
+        return jsonify(ok=False, msg="订单不存在"), 404
+    if order["status"] != "pending":
+        set_stat(db, "pickup_flag", 0)
+        db.commit()
+        u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
+        return jsonify(ok=True, already=True, order_id=oid,
+                       order_status=order["status"], paid=order["total"],
+                       coins=(u["coins"] if u else None))
+
+    line_items = json.loads(order["items"] or "[]")
+    delivered_map = {str(li["id"]): 0 for li in line_items}
+    total_qty = sum(int(li.get("qty", 0)) for li in line_items)
+    status, paid = _settle_order(
+        db, order, line_items, delivered_map,
+        {"exec": total_qty, "success": 0, "fail": total_qty},
+    )
+    db.execute(
+        "UPDATE tasks SET status='failed', result=?, finished_at=? "
+        "WHERE order_id=? AND status IN ('pending','running')",
+        (json.dumps({"reason": "customer_reported_grab_failure"}, ensure_ascii=False),
+         now_str(), order["id"]),
+    )
+    set_stat(db, "pickup_flag", 0)
+    db.commit()
+    u = db.execute("SELECT coins FROM users WHERE id=?", (order["user_id"],)).fetchone()
+    return jsonify(ok=True, order_id=oid, order_status=status, paid=paid,
+                   coins=(u["coins"] if u else None),
+                   msg="已记录抓取失败，本次未扣款")
+
+
+@app.route("/api/order/rating", methods=["POST"])
+def api_order_rating():
+    """保存顾客对已完成订单的 1~5 星评价；再次评分会覆盖旧分数。"""
+    data = request.get_json(force=True, silent=True) or {}
+    oid = data.get("order_id")
+    try:
+        rating = int(data.get("rating"))
+    except (TypeError, ValueError):
+        return jsonify(ok=False, msg="评分必须是 1 到 5 星"), 400
+    if rating < 1 or rating > 5:
+        return jsonify(ok=False, msg="评分必须是 1 到 5 星"), 400
+
+    db = get_db()
+    order = db.execute("SELECT status FROM orders WHERE id=?", (oid,)).fetchone()
+    if not order:
+        return jsonify(ok=False, msg="订单不存在"), 404
+    if order["status"] not in ("success", "partial"):
+        return jsonify(ok=False, msg="订单尚未成功交付，暂不能评分"), 409
+    db.execute("UPDATE orders SET rating=? WHERE id=?", (rating, oid))
+    db.commit()
+    return jsonify(ok=True, order_id=oid, rating=rating, msg=f"已提交 {rating} 星评价")
 
 
 @app.route("/api/pickup")
@@ -983,6 +1721,7 @@ def api_order_status():
         settled=(order["status"] != "pending"),
         paid=order["total"],
         arm={"exec": order["arm_exec"], "success": order["arm_success"], "fail": order["arm_fail"]},
+        rating=order["rating"],
         coins=(u["coins"] if u else None),
     )
 

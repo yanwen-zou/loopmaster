@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LoopMaster · 库存管理登录</title>
+<link rel="icon" type="image/png" href="/static/loopmaster_logo.png">
+<link rel="stylesheet" href="/static/style.css?v=20260819b">
+</head>
+<body>
+<div class="topbar">
+  <div class="brand">
+    <img class="logo" src="/static/loopmaster_logo.png" alt="LoopMaster"
+         onerror="this.style.display='none'">
+    <div>LoopMaster<br><small>库存管理系统</small></div>
+  </div>
+  <div class="links"><a href="/">← 返回购买页</a></div>
+</div>
+
+<main class="wrap">
+  <form class="login-card" method="post" action="/admin/login" autocomplete="off">
+    <h1>🔐 管理员验证</h1>
+    <p>请输入库存管理密码，验证后可补货和上架新商品。</p>
+    <input type="hidden" name="next" value="{{ next_url }}">
+    <label for="adminPassword">管理密码</label>
+    <input id="adminPassword" name="password" type="password" required autofocus
+           placeholder="请输入密码" autocomplete="current-password">
+    {% if error %}<div class="admin-login-error">{{ error }}</div>{% endif %}
+    <button class="btn mt" type="submit">进入库存管理 →</button>
+  </form>
+</main>
+</body>
+</html>
